@@ -9,7 +9,8 @@
  * stay decoupled, each upgrades independently.
  */
 import { readFile } from 'node:fs/promises'
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import { dirname, join } from 'node:path'
@@ -158,31 +159,48 @@ function extractQuery(messages: readonly { content?: readonly ContentBlock[] }[]
     .trim()
 }
 
-/** Parse `oks recall --format json` → compact <recalled-memory> text, or '' .
+interface RecallHit { slug?: string; title?: string; type?: string; relevance?: number; body_preview?: string }
+interface EpisodicHit { source_path?: string; snippet?: string; relevance?: number }
+
+/** A parsed recall result: the context text to inject + the slugs it cited,
+ * tagged with an inject_id so the model can later rate the injection. */
+interface ParsedRecall {
+  text: string
+  injectId: string
+  slugs: string[]
+}
+
+/** Parse `oks recall --format json` → context text + slugs + inject_id, or null.
  * Real shape: { schema_version, query, knowledge:[{slug,title,type,relevance,body_preview}], episodic:[{source_path,snippet,relevance}] } */
-function parseRecall(stdout: string): string {
+function parseRecall(stdout: string): ParsedRecall | null {
   try {
     const data = JSON.parse(stdout) as { knowledge?: RecallHit[]; episodic?: EpisodicHit[] }
     const items = [...(data.knowledge ?? []), ...(data.episodic ?? [])]
-    if (items.length === 0) return ''
+    if (items.length === 0) return null
     const lines = items.map(m => 'slug' in m
       ? `- [${m.type ?? 'memory'}] ${m.title ?? m.slug ?? ''} (${m.slug ?? '?'}) rel=${m.relevance ?? 0}\n${(m.body_preview ?? '').slice(0, 600)}`
       : `- [episodic] ${(m as EpisodicHit).source_path ?? ''} rel=${(m as EpisodicHit).relevance ?? 0}\n${((m as EpisodicHit).snippet ?? '').slice(0, 400)}`)
-    return `## 相关记忆\n相关已沉淀记忆（引用时用 slug；与当前事实冲突以最新为准）：\n${lines.join('\n\n')}`
-  } catch { return '' }
+    const slugs = items.map(m => 'slug' in m ? (m.slug ?? '') : (m as EpisodicHit).source_path ?? '').filter(Boolean)
+    const injectId = randomUUID().slice(0, 8)
+    const text = `## 相关记忆\n相关已沉淀记忆（引用时用 slug；与当前事实冲突以最新为准）：\n${lines.join('\n\n')}\n<!-- inject_id:${injectId} slugs:${slugs.join(',')} -->`
+    return { text, injectId, slugs }
+  } catch { return null }
 }
 
 /** A short post-tool signal: just slug + rel, no body (mode 'signal'). */
-function parseSignal(stdout: string): string {
+function parseSignal(stdout: string): ParsedRecall | null {
   try {
     const data = JSON.parse(stdout) as { knowledge?: RecallHit[]; episodic?: EpisodicHit[] }
     const items = [...(data.knowledge ?? []), ...(data.episodic ?? [])]
-    if (items.length === 0) return ''
+    if (items.length === 0) return null
     const lines = items.map(m => 'slug' in m
       ? `- [${m.type ?? 'memory'}] ${m.title ?? m.slug ?? ''} (${m.slug ?? '?'}) rel=${m.relevance ?? 0}`
       : `- [episodic] ${(m as EpisodicHit).source_path ?? ''} rel=${(m as EpisodicHit).relevance ?? 0}`)
-    return `[oks post-tool signal] 可能相关：\n${lines.join('\n')}`
-  } catch { return '' }
+    const slugs = items.map(m => 'slug' in m ? (m.slug ?? '') : (m as EpisodicHit).source_path ?? '').filter(Boolean)
+    const injectId = randomUUID().slice(0, 8)
+    const text = `[oks post-tool signal] 可能相关：\n${lines.join('\n')}\n<!-- inject_id:${injectId} slugs:${slugs.join(',')} -->`
+    return { text, injectId, slugs }
+  } catch { return null }
 }
 
 /** Build a UserMessage carrying context text, tagged with our plugin source. */
@@ -190,8 +208,20 @@ function contextMessage(text: string): UserMessage {
   return createUserMessage({ content: [{ type: 'text', text }], source: PLUGIN_SOURCE })
 }
 
-interface RecallHit { slug?: string; title?: string; type?: string; relevance?: number; body_preview?: string }
-interface EpisodicHit { source_path?: string; snippet?: string; relevance?: number }
+/** Path to the inject-feedback JSONL log (under ~/.oks/, the global config dir). */
+function feedbackLogPath(): string {
+  return join(process.env.HOME ?? '/tmp', '.oks', 'inject_feedback.log')
+}
+
+/** Append a feedback record as one JSONL line. Best-effort; never throws. */
+function appendFeedback(record: Record<string, unknown>): void {
+  try {
+    const line = JSON.stringify({ ...record, ts: new Date().toISOString() })
+    const dir = dirname(feedbackLogPath())
+    mkdirSync(dir, { recursive: true })
+    appendFileSync(feedbackLogPath(), line + '\n', 'utf-8')
+  } catch { /* best-effort: feedback must not crash the host */ }
+}
 
 /** Derive a recall query from a tool execution: its name + stringified args. */
 function deriveQuery(exec: ToolExecution): string {
@@ -284,6 +314,44 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     },
   }))
 
+  // ── Tool: oks_inject_feedback — AI rates an injection (closed-loop) ─────
+  // The pre-step/post-execute hooks tag every injection with an inject_id.
+  // After answering, the model calls this to record whether the injected
+  // memories were useful — feeding oks metrics a quality signal.
+  ctx.tools.register(defineTool({
+    name: 'oks_inject_feedback',
+    description:
+      'Rate a prior OKS memory injection by its inject_id. Call this after ' +
+      'answering when an injected <recalled-memory> or <oks-memory-signal> ' +
+      'block carried a <!-- inject_id:xxx slugs:a,b --> tag. ' +
+      'useful = cited/applied the memory; noise = irrelevant clutter; ' +
+      'irrelevant = on-topic but not needed this turn. This feeds the ' +
+      'injection-quality metric used to tune recall floors.',
+    parameters: {
+      inject_id: { type: 'string', required: true, description: 'inject_id from the injection tag' },
+      rating: { type: 'string', required: true, description: 'one of: useful | noise | irrelevant' },
+      slugs: { type: 'string', description: 'comma-list of slugs that were in the injection (optional)' },
+      reason: { type: 'string', description: 'one-line why (optional)' },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: value }],
+    },
+    async execute(args) {
+      const rating = String(args.rating)
+      if (!['useful', 'noise', 'irrelevant'].includes(rating)) {
+        return `error: rating must be useful|noise|irrelevant, got '${rating}'`
+      }
+      appendFeedback({
+        inject_id: args.inject_id,
+        rating,
+        slugs: args.slugs ?? '',
+        reason: args.reason ?? '',
+      })
+      return `recorded: inject_id=${args.inject_id} rating=${rating}`
+    },
+  }))
+
   // ── Hook: agent/pre-step — deterministic per-turn recall (UserPromptSubmit) ──
   // DELEGATE then prepend: a later listener may still reject; we only attach
   // context to a downstream 'enter'. query < 10 / oks failure → no-op.
@@ -300,7 +368,7 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     if (!recalled) return next()
     const downstream = await next()
     if (downstream.kind !== 'enter') return downstream
-    return { kind: 'enter', messages: [...downstream.messages, contextMessage(recalled)] }
+    return { kind: 'enter', messages: [...downstream.messages, contextMessage(recalled.text)] }
   })
 
   // ── Hook: tools/post-execute — post-tool memory signal (PostToolUse) ──
@@ -310,12 +378,12 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     const query = deriveQuery(exec)
     if (query.length < 6) return next()
     let out = ''
-    try { out = await runOks(['recall', escapeQuery(query), '--format', 'json', '--limit', '2']) }
+    try { out = await runOks(['recall', escapeQuery(query), '--format', 'json', '--limit', '2', '--floor', '0.9']) }
     catch { return next() }
     const signal = parseSignal(out)
     if (!signal) return next()
     const downstream = await next()
-    return { ...downstream, additionalContexts: [contextMessage(signal), ...(downstream.additionalContexts ?? [])] }
+    return { ...downstream, additionalContexts: [contextMessage(signal.text), ...(downstream.additionalContexts ?? [])] }
   })
 
   // ── Skill (optional service — use ctx.get, not inject) ──────────────
