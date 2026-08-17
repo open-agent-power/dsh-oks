@@ -51,7 +51,11 @@ const field = (label: string, control: ReactNode): ReactNode => (
 export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
   const scope = props.scope
   if (!scope) return <p style={{ color: '#888' }}>scope 未绑定</p>
-  const snap = useSyncExternalStore(scope.subscribe, scope.getSnapshot, scope.getSnapshot)
+  const snap = useSyncExternalStore(
+    (cb: () => void) => scope.subscribe(cb),
+    () => scope.getSnapshot(),
+    () => scope.getSnapshot(),
+  )
 
   if (snap.status === 'loading') return <p style={{ padding: '0.5rem 0', color: '#888' }}>加载 OKS 配置中…</p>
   if (snap.status === 'unavailable') return null
