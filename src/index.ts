@@ -152,23 +152,29 @@ function extractQuery(messages: readonly { content?: readonly ContentBlock[] }[]
     .trim()
 }
 
-/** Parse `oks recall --format json` → compact <recalled-memory> text, or '' . */
+/** Parse `oks recall --format json` → compact <recalled-memory> text, or '' .
+ * Real shape: { schema_version, query, knowledge:[{slug,title,type,relevance,body_preview}], episodic:[{source_path,snippet,relevance}] } */
 function parseRecall(stdout: string): string {
   try {
-    const data = JSON.parse(stdout) as Array<{ slug?: string; title?: string; type?: string; rel?: number; body?: string }>
-    if (!Array.isArray(data) || data.length === 0) return ''
-    const lines = data.map(m =>
-      `- [${m.type ?? 'memory'}] ${m.title ?? m.slug ?? ''} (${m.slug ?? '?'}) rel=${m.rel ?? 0}\n${(m.body ?? '').slice(0, 600)}`)
-    return `## 相关记忆\n相关已沉淀记忆（引用时用 slug）：\n${lines.join('\n\n')}`
+    const data = JSON.parse(stdout) as { knowledge?: RecallHit[]; episodic?: EpisodicHit[] }
+    const items = [...(data.knowledge ?? []), ...(data.episodic ?? [])]
+    if (items.length === 0) return ''
+    const lines = items.map(m => 'slug' in m
+      ? `- [${m.type ?? 'memory'}] ${m.title ?? m.slug ?? ''} (${m.slug ?? '?'}) rel=${m.relevance ?? 0}\n${(m.body_preview ?? '').slice(0, 600)}`
+      : `- [episodic] ${(m as EpisodicHit).source_path ?? ''} rel=${(m as EpisodicHit).relevance ?? 0}\n${((m as EpisodicHit).snippet ?? '').slice(0, 400)}`)
+    return `## 相关记忆\n相关已沉淀记忆（引用时用 slug；与当前事实冲突以最新为准）：\n${lines.join('\n\n')}`
   } catch { return '' }
 }
 
 /** A short post-tool signal: just slug + rel, no body (mode 'signal'). */
 function parseSignal(stdout: string): string {
   try {
-    const data = JSON.parse(stdout) as Array<{ slug?: string; title?: string; rel?: number }>
-    if (!Array.isArray(data) || data.length === 0) return ''
-    const lines = data.map(m => `- ${m.title ?? m.slug ?? ''} (${m.slug ?? '?'}) rel=${m.rel ?? 0}`)
+    const data = JSON.parse(stdout) as { knowledge?: RecallHit[]; episodic?: EpisodicHit[] }
+    const items = [...(data.knowledge ?? []), ...(data.episodic ?? [])]
+    if (items.length === 0) return ''
+    const lines = items.map(m => 'slug' in m
+      ? `- [${m.type ?? 'memory'}] ${m.title ?? m.slug ?? ''} (${m.slug ?? '?'}) rel=${m.relevance ?? 0}`
+      : `- [episodic] ${(m as EpisodicHit).source_path ?? ''} rel=${(m as EpisodicHit).relevance ?? 0}`)
     return `[oks post-tool signal] 可能相关：\n${lines.join('\n')}`
   } catch { return '' }
 }
@@ -177,6 +183,9 @@ function parseSignal(stdout: string): string {
 function contextMessage(text: string): UserMessage {
   return createUserMessage({ content: [{ type: 'text', text }], source: PLUGIN_SOURCE })
 }
+
+interface RecallHit { slug?: string; title?: string; type?: string; relevance?: number; body_preview?: string }
+interface EpisodicHit { source_path?: string; snippet?: string; relevance?: number }
 
 /** Derive a recall query from a tool execution: its name + stringified args. */
 function deriveQuery(exec: ToolExecution): string {
