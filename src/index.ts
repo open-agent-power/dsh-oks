@@ -36,6 +36,8 @@ export interface OksConfig {
   recall_topn?: number
   recall_minlen?: number
   recall_cooldown?: number
+  prestep_floor?: number
+  prestep_knowledge_only?: boolean
   posttool_mode?: string
   posttool_floor?: number
   posttool_topn?: number
@@ -51,6 +53,10 @@ export const OksConfigSchema: z<OksConfig> = z.object({
   recall_topn: z.number().step(1).min(1).max(10).default(3),
   recall_minlen: z.number().step(1).min(1).max(50).default(6),
   recall_cooldown: z.number().step(1).min(0).max(100).default(10),
+  // pre-step hook uses a higher floor + knowledge-only to avoid noisy recall
+  // on every casual greeting (the deterministic-injection path is stricter).
+  prestep_floor: z.number().min(0).max(1).step(0.05).default(0.85),
+  prestep_knowledge_only: z.boolean().default(true),
   posttool_mode: z.union(['signal', 'full']).default('signal'),
   posttool_floor: z.number().min(0).max(1).step(0.05).default(0.9),
   posttool_topn: z.number().step(1).min(1).max(10).default(2),
@@ -280,12 +286,15 @@ export function apply(ctx: Context, config: OksConfig = {}) {
 
   // ── Hook: agent/pre-step — deterministic per-turn recall (UserPromptSubmit) ──
   // DELEGATE then prepend: a later listener may still reject; we only attach
-  // context to a downstream 'enter'. query < minlen or oks failure → no-op.
+  // context to a downstream 'enter'. query < 10 / oks failure → no-op.
+  // Higher floor (0.85) + knowledge-only to avoid noisy recall on greetings.
   ctx.on('agent/pre-step', async ({ messages }, next): Promise<PreStepDecision> => {
     const query = extractQuery(messages)
-    if (query.length < 6) return next()
+    if (query.length < 10) return next()
+    const args = ['recall', escapeQuery(query), '--format', 'json', '--limit', '2', '--floor', String(config.prestep_floor ?? 0.85)]
+    if (config.prestep_knowledge_only ?? true) args.push('--knowledge-only')
     let out = ''
-    try { out = await runOks(['recall', escapeQuery(query), '--format', 'json', '--limit', '3']) }
+    try { out = await runOks(args) }
     catch { return next() }
     const recalled = parseRecall(out)
     if (!recalled) return next()
