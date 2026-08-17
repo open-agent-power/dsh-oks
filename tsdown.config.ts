@@ -21,7 +21,7 @@ const PLATFORM_MODULES = [
 const RUNTIME_EXEMPTION = '@deepseek-ai/dsh-client-runtime/client'
 const EXTERNALS = [...PLATFORM_MODULES, RUNTIME_EXEMPTION]
 
-const ID = '@deepseek-ai/dsh-oks'
+const ID = 'dsh-oks'
 
 export default defineConfig({
   name: 'dsh-oks/client',
