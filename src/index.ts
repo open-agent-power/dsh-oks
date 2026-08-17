@@ -15,9 +15,29 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import z from '@deepseek-ai/schemastery'
 
 const execAsync = promisify(exec)
 const __dirname = dirname(fileURLToPath(import.meta.url))
+
+/** Settings namespace — the join key between Host half and browser card. */
+export const OKS_NS = settingsNamespace('oks')
+
+export interface OksConfig {
+  recall_floor?: number
+  recall_topn?: number
+  posttool_mode?: string
+  search_backend?: string
+}
+
+/** Schema for the settings card. Defaults mirror settings/recall.yaml. */
+export const OksConfigSchema: z<OksConfig> = z.object({
+  recall_floor: z.number().min(0).max(1).step(0.05).default(0.7),
+  recall_topn: z.number().step(1).min(1).max(10).default(3),
+  posttool_mode: z.union(['signal', 'full']).default('signal'),
+  search_backend: z.union(['native', 'fts5', 'fusion']).default('native'),
+})
 
 /** Resolve the oks binary. Override with OKS_BIN env for non-PATH installs. */
 function oksBin(): string {
@@ -42,7 +62,13 @@ function escapeQuery(q: string): string {
 export const name = 'dsh-oks'
 export const inject = ['tools']
 
-export function apply(ctx: Context) {
+export function apply(ctx: Context, config: OksConfig = {}) {
+  // ── Settings namespace (Host half) — pairs with browser RecallParamsCard ──
+  installSettingsSection(ctx, OKS_NS, OksConfigSchema, config, {
+    // oks reads settings/recall.yaml at call time; no hot-reload needed.
+    onChange: () => {},
+  })
+
   // ── Tool: oks_recall ────────────────────────────────────────────────
   ctx.tools.register(defineTool({
     name: 'oks_recall',
