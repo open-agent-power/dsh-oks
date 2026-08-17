@@ -2,26 +2,26 @@
  * OKS settings card — browser half component.
  *
  * Owns its own chrome (the bundle-purity gate forbids importing the section's
- * PluginCard). Reads the resolved value through the bound scope snapshot and
- * writes one field per change via scope.set — a deliberately simple model:
- * no staged edits, no revision fencing, each input writes straight through.
+ * PluginCard). Reads through scope.getSnapshot() (status field, not available),
+ * subscribes for changes, and writes one field per change via scope.set.
  * oks reads settings/recall.yaml at call time, so the next recall honors the
  * new value without restart.
  */
-import { useState, useEffect, type ReactNode } from 'react'
+import { useState, useEffect, useSyncExternalStore, type ReactNode } from 'react'
 
 export interface OksScope {
-  snapshot: () => {
-    value: {
+  getSnapshot: () => {
+    status: 'loading' | 'ready' | 'unavailable'
+    value?: {
       recall_floor?: number
       recall_topn?: number
       posttool_mode?: string
       search_backend?: string
     }
-    available: boolean
     writable: boolean
   }
-  set: (field: string, value: unknown) => void
+  subscribe: (listener: () => void) => () => void
+  set: (field: string, value: unknown) => Promise<void>
 }
 
 export interface RecallParamsCardProps {
@@ -34,21 +34,19 @@ const FALLBACK = { recall_floor: 0.7, recall_topn: 3, posttool_mode: 'signal', s
 
 export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
   const { scope } = props
-  const [snap, setSnap] = useState(() => scope.snapshot())
+  // useSyncExternalStore: the dsh scope is an external store (getSnapshot + subscribe).
+  const snap = useSyncExternalStore(scope.subscribe, scope.getSnapshot, scope.getSnapshot)
   const [saved, setSaved] = useState(false)
 
-  useEffect(() => {
-    setSnap(scope.snapshot())
-  }, [scope])
-
-  if (!snap.available) return null
+  if (snap.status === 'loading') return <p style={{ padding: '0.5rem 0', color: '#888' }}>加载 OKS 配置中…</p>
+  if (snap.status === 'unavailable') return null
   const value = { ...FALLBACK, ...snap.value }
 
   const update = (field: string, v: unknown) => {
-    scope.set(field, v)
-    setSnap(scope.snapshot())
-    setSaved(true)
-    setTimeout(() => setSaved(false), 1500)
+    void scope.set(field, v).then(() => {
+      setSaved(true)
+      setTimeout(() => setSaved(false), 1500)
+    })
   }
 
   const t = props.t ?? ((k: string) => k)
