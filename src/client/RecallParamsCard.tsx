@@ -212,6 +212,19 @@ export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
               </select>
             </Field>
           </div>
+
+          {/* 📊 注入质量反馈 */}
+          <div style={group}>
+            <div style={groupTitle}>📊 注入质量反馈（闭环）</div>
+            <div style={{ ...field, borderTop: `1px solid ${T.border}` }}>
+              <span style={label}>闭环已启用</span>
+              <span style={hint}>
+                每次注入带 inject_id 标记 → AI 答完后调 oks_inject_feedback 打分
+                （useful/noise/irrelevant）→ 写 ~/.oks/inject_feedback.log →
+                调 oks_inject_stats 或 oks_metrics 查看统计 → noise 多则调高 prestep_floor。
+              </span>
+            </div>
+          </div>
           <div style={{ height: 8 }} />
         </div>
       )}

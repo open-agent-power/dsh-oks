@@ -8,8 +8,7 @@
  * Integration: calls `oks` CLI via subprocess — dsh (Node) and oks (Python)
  * stay decoupled, each upgrades independently.
  */
-import { readFile } from 'node:fs/promises'
-import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs'
+import { readFile, readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -223,6 +222,30 @@ function appendFeedback(record: Record<string, unknown>): void {
   } catch { /* best-effort: feedback must not crash the host */ }
 }
 
+/** Read ~/.oks/inject_feedback.log and tally ratings. Best-effort; never throws. */
+function readInjectStats(): { total: number; useful: number; noise: number; irrelevant: number; bySlug: Record<string, { useful: number; noise: number; irrelevant: number }> } {
+  const empty = { total: 0, useful: 0, noise: 0, irrelevant: 0, bySlug: {} as Record<string, { useful: number; noise: number; irrelevant: number }> }
+  try {
+    const raw = readFileSync(feedbackLogPath(), 'utf-8').trim()
+    if (!raw) return empty
+    for (const line of raw.split('\n')) {
+      try {
+        const r = JSON.parse(line) as { rating?: string; slugs?: string }
+        const rating = r.rating as 'useful' | 'noise' | 'irrelevant' | undefined
+        if (!rating || !(rating in empty)) continue
+        empty[rating]++
+        empty.total++
+        const slugs = String(r.slugs ?? '').split(',').map(s => s.trim()).filter(Boolean)
+        for (const s of slugs) {
+          empty.bySlug[s] ??= { useful: 0, noise: 0, irrelevant: 0 }
+          empty.bySlug[s][rating]++
+        }
+      } catch { /* skip malformed line */ }
+    }
+  } catch { /* file missing */ }
+  return empty
+}
+
 /** Derive a recall query from a tool execution: its name + stringified args. */
 function deriveQuery(exec: ToolExecution): string {
   const args = Object.entries(exec.args ?? {} as Record<string, unknown>)
@@ -310,7 +333,32 @@ export function apply(ctx: Context, config: OksConfig = {}) {
       render: (_args, value) => [{ type: 'text', text: value }],
     },
     async execute() {
-      return runOks(['metrics'])
+      const base = await runOks(['metrics'])
+      const s = readInjectStats()
+      const rate = s.total > 0 ? Math.round((s.useful / s.total) * 100) : 0
+      const injectBlock = `\n--- 注入质量（dsh-oks feedback）---\n总计 ${s.total} 次反馈 | useful ${s.useful} (${s.total ? Math.round(s.useful / s.total * 100) : 0}%) | noise ${s.noise} | irrelevant ${s.irrelevant} | useful 率 ${rate}%`
+      const topSlugs = Object.entries(s.bySlug).sort((a, b) => (b[1].useful + b[1].noise) - (a[1].useful + a[1].noise)).slice(0, 5)
+      const slugLines = topSlugs.length ? topSlugs.map(([slug, c]) => `  ${slug}: useful ${c.useful} / noise ${c.noise}`).join('\n') : '  （暂无）'
+      return base + injectBlock + '\n按 slug：\n' + slugLines
+    },
+  }))
+
+  // ── Tool: oks_inject_stats — injection-quality summary ───────────────
+  ctx.tools.register(defineTool({
+    name: 'oks_inject_stats',
+    description:
+      'Show OKS injection-quality stats: total feedback count, useful/noise/' +
+      'irrelevant breakdown, and per-slug ratings. Use to decide whether to ' +
+      'raise prestep_floor (more noise) or lower it (missed useful).',
+    parameters: {},
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: value }],
+    },
+    async execute() {
+      const s = readInjectStats()
+      if (s.total === 0) return '暂无注入反馈记录。AI 答完后调 oks_inject_feedback 累积数据。'
+      return JSON.stringify(s, null, 2)
     },
   }))
 
@@ -378,7 +426,7 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     const query = deriveQuery(exec)
     if (query.length < 6) return next()
     let out = ''
-    try { out = await runOks(['recall', escapeQuery(query), '--format', 'json', '--limit', '2', '--floor', '0.9']) }
+    try { out = await runOks(['recall', escapeQuery(query), '--format', 'json', '--limit', '2', '--floor', String(config.posttool_floor ?? 0.9)]) }
     catch { return next() }
     const signal = parseSignal(out)
     if (!signal) return next()
@@ -403,4 +451,5 @@ export function apply(ctx: Context, config: OksConfig = {}) {
         // skill file missing — silent skip
       })
   }
+}
 }
