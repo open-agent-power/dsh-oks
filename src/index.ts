@@ -8,7 +8,8 @@
  * Integration: calls `oks` CLI via subprocess — dsh (Node) and oks (Python)
  * stay decoupled, each upgrades independently.
  */
-import { readFile, readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
