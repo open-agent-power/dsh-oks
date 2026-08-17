@@ -8,13 +8,18 @@
  * Integration: calls `oks` CLI via subprocess — dsh (Node) and oks (Python)
  * stay decoupled, each upgrades independently.
  */
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFileSync, mkdirSync } from 'node:fs'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
+import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
+import type { UserMessage } from '@deepseek-ai/dsh-session'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 
@@ -60,31 +65,52 @@ function oksBin(): string {
 /** Sync the namespace value to oks's own stores: knowledge_base_path →
  * `oks config set` (writes ~/.oks/config.json); recall/posttool/search →
  * settings/recall.yaml (hand-rolled YAML so we need no dep). */
-function syncOksConfig(cfg: OksConfig): void {
+async function syncOksConfig(cfg: OksConfig): Promise<void> {
   try {
     if (cfg.knowledge_base_path) {
-      void execAsync(`${oksBin()} config set knowledge_base_path "${cfg.knowledge_base_path.replace(/"/g, '\\"')}"`)
+      await execAsync(`${oksBin()} config set knowledge_base_path "${cfg.knowledge_base_path.replace(/"/g, '\\"')}"`)
         .catch(() => {})
     }
-    const kbPath = cfg.knowledge_base_path || readOksKnowledgeBasePath()
+    const kbPath = cfg.knowledge_base_path || (await readOksKnowledgeBasePath())
     if (kbPath) writeRecallYaml(kbPath, cfg)
   } catch { /* best-effort; settings UI must not crash the host */ }
 }
 
 /** Read the current knowledge_base_path from `oks config show` output. */
-function readOksKnowledgeBasePath(): string {
+async function readOksKnowledgeBasePath(): Promise<string> {
   try {
-    const { stdout } = require('node:child_process').execSync(`${oksBin()} config show`, { encoding: 'utf-8', timeout: 5000 })
+    const { stdout } = await execAsync(`${oksBin()} config show`, { encoding: 'utf-8', timeout: 5000 })
     const m = stdout.match(/\/\S+/)
     return m ? m[0] : ''
   } catch { return '' }
 }
 
-/** Write settings/recall.yaml from the namespace value (hand-rolled YAML). */
+/** Write settings/recall.yaml from the namespace value. Preserves every field
+ * the recall.yaml schema owns so an overwrite never drops a key. */
 function writeRecallYaml(kbPath: string, cfg: OksConfig): void {
-  const yaml = `# OKS recall 参数 — managed by dsh-oks plugin\nrecall:\n  floor: ${cfg.recall_floor ?? 0.7}\n  topn: ${cfg.recall_topn ?? 3}\n  minlen: ${cfg.recall_minlen ?? 6}\n  cooldown: ${cfg.recall_cooldown ?? 10}\nposttool:\n  floor: ${cfg.posttool_floor ?? 0.9}\n  topn: ${cfg.posttool_topn ?? 2}\n  mode: ${cfg.posttool_mode ?? 'signal'}\n  recall: 1\n  signal_rel_floor: ${cfg.posttool_signal_rel_floor ?? 2.5}\nsearch_backend: ${cfg.search_backend ?? 'native'}\n`
-  const { writeFileSync, mkdirSync } = require('node:fs')
-  const { join } = require('node:path')
+  const yaml = [
+    '# OKS recall 参数 — managed by dsh-oks plugin',
+    'recall:',
+    `  floor: ${cfg.recall_floor ?? 0.7}`,
+    `  topn: ${cfg.recall_topn ?? 3}`,
+    `  minlen: ${cfg.recall_minlen ?? 6}`,
+    `  cooldown: ${cfg.recall_cooldown ?? 10}`,
+    'posttool:',
+    `  floor: ${cfg.posttool_floor ?? 0.9}`,
+    `  topn: ${cfg.posttool_topn ?? 2}`,
+    `  mode: ${cfg.posttool_mode ?? 'signal'}`,
+    '  recall: 1',
+    `  signal_rel_floor: ${cfg.posttool_signal_rel_floor ?? 2.5}`,
+    'userprompt:',
+    `  floor: ${cfg.recall_floor ?? 0.7}`,
+    `  topn: ${cfg.recall_topn ?? 3}`,
+    `  cooldown: ${cfg.recall_cooldown ?? 10}`,
+    'conflict:',
+    '  window: 300',
+    `search_backend: ${cfg.search_backend ?? 'native'}`,
+    'mail_topn: 3',
+    '',
+  ].join('\n')
   const dir = join(kbPath, 'settings')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'recall.yaml'), yaml, 'utf-8')
@@ -106,7 +132,58 @@ function escapeQuery(q: string): string {
 }
 
 export const name = 'dsh-oks'
-export const inject = ['tools']
+export const inject = ['tools', 'agent']
+
+/** Source label for hook-injected messages — lets downstream see who spoke. */
+const PLUGIN_SOURCE: MessageSource = { kind: 'plugin', plugin: 'dsh-oks' }
+
+/** Tools whose results are worth a post-tool memory signal. */
+const SIGNAL_TOOLS = new Set(['read', 'write', 'edit', 'bash', 'grep', 'glob'])
+
+/** Pull the plain-text query out of the last user message's content blocks. */
+function extractQuery(messages: readonly { content?: readonly ContentBlock[] }[]): string {
+  const last = messages[messages.length - 1]
+  if (!last?.content) return ''
+  return last.content
+    .filter((b): b is { type: 'text'; text: string } => b.type === 'text' && 'text' in b)
+    .map(b => b.text)
+    .join(' ')
+    .trim()
+}
+
+/** Parse `oks recall --format json` → compact <recalled-memory> text, or '' . */
+function parseRecall(stdout: string): string {
+  try {
+    const data = JSON.parse(stdout) as Array<{ slug?: string; title?: string; type?: string; rel?: number; body?: string }>
+    if (!Array.isArray(data) || data.length === 0) return ''
+    const lines = data.map(m =>
+      `- [${m.type ?? 'memory'}] ${m.title ?? m.slug ?? ''} (${m.slug ?? '?'}) rel=${m.rel ?? 0}\n${(m.body ?? '').slice(0, 600)}`)
+    return `## 相关记忆\n相关已沉淀记忆（引用时用 slug）：\n${lines.join('\n\n')}`
+  } catch { return '' }
+}
+
+/** A short post-tool signal: just slug + rel, no body (mode 'signal'). */
+function parseSignal(stdout: string): string {
+  try {
+    const data = JSON.parse(stdout) as Array<{ slug?: string; title?: string; rel?: number }>
+    if (!Array.isArray(data) || data.length === 0) return ''
+    const lines = data.map(m => `- ${m.title ?? m.slug ?? ''} (${m.slug ?? '?'}) rel=${m.rel ?? 0}`)
+    return `[oks post-tool signal] 可能相关：\n${lines.join('\n')}`
+  } catch { return '' }
+}
+
+/** Build a UserMessage carrying context text, tagged with our plugin source. */
+function contextMessage(text: string): UserMessage {
+  return createUserMessage({ content: [{ type: 'text', text }], source: PLUGIN_SOURCE })
+}
+
+/** Derive a recall query from a tool execution: its name + stringified args. */
+function deriveQuery(exec: ToolExecution): string {
+  const args = Object.entries(exec.args ?? {} as Record<string, unknown>)
+    .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    .join(' ')
+  return `${exec.name} ${args}`.slice(0, 200)
+}
 
 export function apply(ctx: Context, config: OksConfig = {}) {
   // ── Settings namespace (Host half) — pairs with browser RecallParamsCard ──
@@ -190,6 +267,37 @@ export function apply(ctx: Context, config: OksConfig = {}) {
       return runOks(['metrics'])
     },
   }))
+
+  // ── Hook: agent/pre-step — deterministic per-turn recall (UserPromptSubmit) ──
+  // DELEGATE then prepend: a later listener may still reject; we only attach
+  // context to a downstream 'enter'. query < minlen or oks failure → no-op.
+  ctx.on('agent/pre-step', async ({ messages }, next): Promise<PreStepDecision> => {
+    const query = extractQuery(messages)
+    if (query.length < 6) return next()
+    let out = ''
+    try { out = await runOks(['recall', escapeQuery(query), '--format', 'json', '--limit', '3']) }
+    catch { return next() }
+    const recalled = parseRecall(out)
+    if (!recalled) return next()
+    const downstream = await next()
+    if (downstream.kind !== 'enter') return downstream
+    return { kind: 'enter', messages: [...downstream.messages, contextMessage(recalled)] }
+  })
+
+  // ── Hook: tools/post-execute — post-tool memory signal (PostToolUse) ──
+  // Only signal for read/write/edit/bash/grep/glob; oks failure → no-op.
+  ctx.on('tools/post-execute', async (exec: ToolExecution, _result: Readonly<ToolExecutionResult>, next): Promise<PostToolDecision> => {
+    if (!SIGNAL_TOOLS.has(exec.name)) return next()
+    const query = deriveQuery(exec)
+    if (query.length < 6) return next()
+    let out = ''
+    try { out = await runOks(['recall', escapeQuery(query), '--format', 'json', '--limit', '2']) }
+    catch { return next() }
+    const signal = parseSignal(out)
+    if (!signal) return next()
+    const downstream = await next()
+    return { ...downstream, additionalContexts: [contextMessage(signal), ...(downstream.additionalContexts ?? [])] }
+  })
 
   // ── Skill (optional service — use ctx.get, not inject) ──────────────
   const skills = ctx.get('skills')
