@@ -11,7 +11,7 @@
 import { readFile } from 'node:fs/promises'
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { exec } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,7 +25,7 @@ import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deep
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 
-const execAsync = promisify(exec)
+const execAsync = promisify(execFile)
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 /** Settings namespace — the join key between Host half and browser card. */
@@ -124,19 +124,14 @@ function writeRecallYaml(kbPath: string, cfg: OksConfig): void {
   writeFileSync(join(dir, 'recall.yaml'), yaml, 'utf-8')
 }
 
-/** Run `oks <args>` and return stdout. Throws on non-zero exit. */
+/** Run `oks <args>` and return stdout. Uses execFile (no shell) so args like
+ * `;rm -rf /` are passed literally to oks, never parsed by a shell. */
 async function runOks(args: string[]): Promise<string> {
-  const cmd = `${oksBin()} ${args.join(' ')}`
-  const { stdout } = await execAsync(cmd, {
+  const { stdout } = await execAsync(oksBin(), args, {
     maxBuffer: 10 * 1024 * 1024,
     env: { ...process.env },
   })
   return stdout
-}
-
-/** Shell-escape a query string for safe interpolation into the oks CLI. */
-function escapeQuery(q: string): string {
-  return `"${q.replace(/"/g, '\\"')}"`
 }
 
 export const name = 'dsh-oks'
@@ -311,7 +306,7 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     },
     async execute(args) {
       const limit = args.limit ?? 3
-      return runOks(['recall', escapeQuery(args.query), '--format', 'json', '--limit', String(limit)])
+      return runOks(['recall', args.query, '--format', 'json', '--limit', String(limit)])
     },
   }))
 
@@ -433,7 +428,7 @@ export function apply(ctx: Context, config: OksConfig = {}) {
   ctx.on('agent/pre-step', async ({ messages }, next): Promise<PreStepDecision> => {
     const query = extractQuery(messages)
     if (query.length < 10) return next()
-    const args = ['recall', escapeQuery(query), '--format', 'json', '--limit', '2', '--floor', String(config.prestep_floor ?? 0.85)]
+    const args = ['recall', query, '--format', 'json', '--limit', '2', '--floor', String(config.prestep_floor ?? 0.85)]
     if (config.prestep_knowledge_only ?? true) args.push('--knowledge-only')
     let out = ''
     try { out = await runOks(args) }
@@ -453,7 +448,7 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     if (query.length < 6) return next()
     const floor = config.posttool_floor ?? 0.9
     let out = ''
-    try { out = await runOks(['recall', escapeQuery(query), '--format', 'json', '--limit', '2', '--floor', String(floor)]) }
+    try { out = await runOks(['recall', query, '--format', 'json', '--limit', '2', '--floor', String(floor)]) }
     catch { return next() }
     const signal = parseSignal(out, query, floor)
     if (!signal) return next()
