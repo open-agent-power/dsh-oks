@@ -132,7 +132,7 @@ function escapeQuery(q: string): string {
 }
 
 export const name = 'dsh-oks'
-export const inject = ['tools', 'agent']
+export const inject = ['tools']
 
 /** Source label for hook-injected messages — lets downstream see who spoke. */
 const PLUGIN_SOURCE: MessageSource = { kind: 'plugin', plugin: 'dsh-oks' }
