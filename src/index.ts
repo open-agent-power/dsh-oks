@@ -171,35 +171,60 @@ interface ParsedRecall {
 }
 
 /** Parse `oks recall --format json` → context text + slugs + inject_id, or null.
- * Real shape: { schema_version, query, knowledge:[{slug,title,type,relevance,body_preview}], episodic:[{source_path,snippet,relevance}] } */
+ * Mirrors pi's user-prompt-recall.py template: <recalled-memory source="oks">
+ * wrapper + body_preview single-line [:160] + [自评闭环] guidance. */
 function parseRecall(stdout: string): ParsedRecall | null {
   try {
     const data = JSON.parse(stdout) as { knowledge?: RecallHit[]; episodic?: EpisodicHit[] }
     const items = [...(data.knowledge ?? []), ...(data.episodic ?? [])]
     if (items.length === 0) return null
-    const lines = items.map(m => 'slug' in m
-      ? `- [${m.type ?? 'memory'}] ${m.title ?? m.slug ?? ''} (${m.slug ?? '?'}) rel=${m.relevance ?? 0}\n${(m.body_preview ?? '').slice(0, 600)}`
-      : `- [episodic] ${(m as EpisodicHit).source_path ?? ''} rel=${(m as EpisodicHit).relevance ?? 0}\n${((m as EpisodicHit).snippet ?? '').slice(0, 400)}`)
+    const lines = ['## 相关记忆', '相关已沉淀记忆（引用时用 slug；与当前事实冲突以最新为准）：']
+    for (const m of items) {
+      if ('slug' in m) {
+        lines.push(`- [${m.type ?? ''}] ${m.title ?? m.slug ?? ''} (${m.slug ?? ''}) rel=${(m.relevance ?? 0).toFixed(2)}`)
+        const preview = String(m.body_preview ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)
+        if (preview) lines.push(`    ${preview}`)
+      } else {
+        lines.push(`- [episodic] ${(m as EpisodicHit).source_path ?? ''} rel=${((m as EpisodicHit).relevance ?? 0).toFixed(2)}`)
+        const snip = String((m as EpisodicHit).snippet ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)
+        if (snip) lines.push(`    ${snip}`)
+      }
+    }
     const slugs = items.map(m => 'slug' in m ? (m.slug ?? '') : (m as EpisodicHit).source_path ?? '').filter(Boolean)
     const injectId = randomUUID().slice(0, 8)
-    const text = `## 相关记忆\n相关已沉淀记忆（引用时用 slug；与当前事实冲突以最新为准）：\n${lines.join('\n\n')}\n<!-- inject_id:${injectId} slugs:${slugs.join(',')} -->`
-    return { text, injectId, slugs }
+    const out = ['<recalled-memory source="oks">', lines.join('\n'), '',
+      '[自评闭环] 埋点由你（AI）代填（人类懒惰不手动）：\n' +
+      '1. 你实际引用了的记忆 → 调 `oks wiki use <slug>`（标 used + access_count++）\n' +
+      '2. 观察用户后续回复——用户接受/引用了某条 → 代调 `oks wiki use <slug>`；' +
+      '用户明确拒绝（"不要"/"错了"）→ 不调（默认未采纳）\n' +
+      '无用忽略——下次 cooldown 换别的。信号都在对话里，你代人类完成。',
+      `<!-- inject_id:${injectId} slugs:${slugs.join(',')} -->`,
+      '</recalled-memory>']
+    return { text: out.join('\n'), injectId, slugs }
   } catch { return null }
 }
 
-/** A short post-tool signal: just slug + rel, no body (mode 'signal'). */
-function parseSignal(stdout: string): ParsedRecall | null {
+/** A short post-tool signal: mirrors pi's post-tool-edit.py signal mode.
+ * <oks-memory-signal source="oks-posttool"> + slug:/rel: colon format + 详情引导. */
+function parseSignal(stdout: string, query: string, floor: number): ParsedRecall | null {
   try {
     const data = JSON.parse(stdout) as { knowledge?: RecallHit[]; episodic?: EpisodicHit[] }
     const items = [...(data.knowledge ?? []), ...(data.episodic ?? [])]
     if (items.length === 0) return null
-    const lines = items.map(m => 'slug' in m
-      ? `- [${m.type ?? 'memory'}] ${m.title ?? m.slug ?? ''} (${m.slug ?? '?'}) rel=${m.relevance ?? 0}`
-      : `- [episodic] ${(m as EpisodicHit).source_path ?? ''} rel=${(m as EpisodicHit).relevance ?? 0}`)
+    const lines = [`<!-- query="${query}" floor=${floor} (signal: slugs only, no body) -->`]
+    for (const m of items) {
+      if ('slug' in m) {
+        lines.push(`- [${m.type ?? ''}] ${m.title ?? m.slug ?? ''} (slug: ${m.slug ?? ''}, rel: ${(m.relevance ?? 0).toFixed(2)})`)
+      } else {
+        lines.push(`- [episodic] ${(m as EpisodicHit).source_path ?? ''} (rel: ${((m as EpisodicHit).relevance ?? 0).toFixed(2)})`)
+      }
+    }
+    lines.push(`  需要详情: oks recall "${query}" --explain`)
     const slugs = items.map(m => 'slug' in m ? (m.slug ?? '') : (m as EpisodicHit).source_path ?? '').filter(Boolean)
     const injectId = randomUUID().slice(0, 8)
-    const text = `[oks post-tool signal] 可能相关：\n${lines.join('\n')}\n<!-- inject_id:${injectId} slugs:${slugs.join(',')} -->`
-    return { text, injectId, slugs }
+    lines.push(`<!-- inject_id:${injectId} slugs:${slugs.join(',')} -->`)
+    const out = ['<oks-memory-signal source="oks-posttool">', ...lines, '</oks-memory-signal>']
+    return { text: out.join('\n'), injectId, slugs }
   } catch { return null }
 }
 
@@ -426,10 +451,11 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     if (!SIGNAL_TOOLS.has(exec.name)) return next()
     const query = deriveQuery(exec)
     if (query.length < 6) return next()
+    const floor = config.posttool_floor ?? 0.9
     let out = ''
-    try { out = await runOks(['recall', escapeQuery(query), '--format', 'json', '--limit', '2', '--floor', String(config.posttool_floor ?? 0.9)]) }
+    try { out = await runOks(['recall', escapeQuery(query), '--format', 'json', '--limit', '2', '--floor', String(floor)]) }
     catch { return next() }
-    const signal = parseSignal(out)
+    const signal = parseSignal(out, query, floor)
     if (!signal) return next()
     const downstream = await next()
     return { ...downstream, additionalContexts: [contextMessage(signal.text), ...(downstream.additionalContexts ?? [])] }
