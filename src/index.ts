@@ -243,6 +243,15 @@ function appendFeedback(record: Record<string, unknown>): void {
   } catch { /* best-effort: feedback must not crash the host */ }
 }
 
+/** Parse oks recall JSON to a plain {knowledge, episodic} object (no prompt text).
+ * Used by the multi-query fan-out in oks_recall. */
+function parseRecallJson(stdout: string): { knowledge: unknown[]; episodic: unknown[] } {
+  try {
+    const d = JSON.parse(stdout) as { knowledge?: unknown[]; episodic?: unknown[] }
+    return { knowledge: d.knowledge ?? [], episodic: d.episodic ?? [] }
+  } catch { return { knowledge: [], episodic: [] } }
+}
+
 /** Read ~/.oks/inject_feedback.log and tally ratings. Best-effort; never throws. */
 function readInjectStats(): { total: number; useful: number; noise: number; irrelevant: number; bySlug: Record<string, { useful: number; noise: number; irrelevant: number }> } {
   const empty = { total: 0, useful: 0, noise: 0, irrelevant: 0, bySlug: {} as Record<string, { useful: number; noise: number; irrelevant: number }> }
@@ -289,15 +298,22 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     description:
       'Recall relevant memories from the OKS knowledge base. ' +
       'Use when the task involves uncertain concepts, historical decisions, ' +
-      'or competitor comparison. Query with task intent, not tool operations.',
+      'or competitor comparison. Query with task intent, not tool operations. ' +
+      'Pass `queries` (5-6 guesses) to fan out: each is recalled in parallel ' +
+      'and results merged + deduped by slug — richer coverage for ambiguous tasks.',
     parameters: {
       query: {
         type: 'string', required: true,
         description: 'Task-intent query. E.g. "OKS memory system vs ai-book chapter 3"',
       },
+      queries: {
+        type: 'array',
+        description: 'Optional 5-6 alternative phrasings; fanned out in parallel and deduped. ' +
+          'E.g. ["git branch naming", "branch strategy", "trunk-based development"].',
+      },
       limit: {
         type: 'number',
-        description: 'Max results (default: recall.topn from settings, or 3)',
+        description: 'Max results per query (default: recall.topn from settings, or 3)',
       },
     },
     output: {
@@ -306,7 +322,28 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     },
     async execute(args) {
       const limit = args.limit ?? 3
-      return runOks(['recall', args.query, '--format', 'json', '--limit', String(limit)])
+      const all = [args.query, ...(args.queries ?? [])].filter(Boolean)
+      if (all.length <= 1) {
+        return runOks(['recall', args.query, '--format', 'json', '--limit', String(limit)])
+      }
+      // Fan out: parallel recall per query, merge + dedupe by slug.
+      const outs = await Promise.all(all.map(q =>
+        runOks(['recall', q, '--format', 'json', '--limit', String(limit)])
+          .then(parseRecallJson).catch(() => ({ knowledge: [], episodic: [] }))))
+      const seen = new Set<string>()
+      const knowledge: unknown[] = []
+      const episodic: unknown[] = []
+      for (const o of outs) {
+        for (const h of o.knowledge ?? []) {
+          const slug = String((h as Record<string, unknown>).slug ?? '')
+          if (slug && !seen.has(slug)) { seen.add(slug); knowledge.push(h) }
+        }
+        for (const h of o.episodic ?? []) {
+          const p = String((h as Record<string, unknown>).source_path ?? '')
+          if (p && !seen.has(p)) { seen.add(p); episodic.push(h) }
+        }
+      }
+      return JSON.stringify({ schema_version: 'recall-response/v1-multi', query: args.query, knowledge, episodic })
     },
   }))
 
