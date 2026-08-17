@@ -25,23 +25,69 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 export const OKS_NS = settingsNamespace('oks')
 
 export interface OksConfig {
+  knowledge_base_path?: string
   recall_floor?: number
   recall_topn?: number
+  recall_minlen?: number
+  recall_cooldown?: number
   posttool_mode?: string
+  posttool_floor?: number
+  posttool_topn?: number
+  posttool_signal_rel_floor?: number
   search_backend?: string
 }
 
-/** Schema for the settings card. Defaults mirror settings/recall.yaml. */
+/** Schema for the settings card. knowledge_base_path writes ~/.oks/config.json
+ * (via `oks config set`); the rest write settings/recall.yaml. */
 export const OksConfigSchema: z<OksConfig> = z.object({
+  knowledge_base_path: z.string().default(''),
   recall_floor: z.number().min(0).max(1).step(0.05).default(0.7),
   recall_topn: z.number().step(1).min(1).max(10).default(3),
+  recall_minlen: z.number().step(1).min(1).max(50).default(6),
+  recall_cooldown: z.number().step(1).min(0).max(100).default(10),
   posttool_mode: z.union(['signal', 'full']).default('signal'),
+  posttool_floor: z.number().min(0).max(1).step(0.05).default(0.9),
+  posttool_topn: z.number().step(1).min(1).max(10).default(2),
+  posttool_signal_rel_floor: z.number().min(0).max(10).step(0.1).default(2.5),
   search_backend: z.union(['native', 'fts5', 'fusion']).default('native'),
 })
 
 /** Resolve the oks binary. Override with OKS_BIN env for non-PATH installs. */
 function oksBin(): string {
   return process.env.OKS_BIN || 'oks'
+}
+
+/** Sync the namespace value to oks's own stores: knowledge_base_path →
+ * `oks config set` (writes ~/.oks/config.json); recall/posttool/search →
+ * settings/recall.yaml (hand-rolled YAML so we need no dep). */
+function syncOksConfig(cfg: OksConfig): void {
+  try {
+    if (cfg.knowledge_base_path) {
+      void execAsync(`${oksBin()} config set knowledge_base_path "${cfg.knowledge_base_path.replace(/"/g, '\\"')}"`)
+        .catch(() => {})
+    }
+    const kbPath = cfg.knowledge_base_path || readOksKnowledgeBasePath()
+    if (kbPath) writeRecallYaml(kbPath, cfg)
+  } catch { /* best-effort; settings UI must not crash the host */ }
+}
+
+/** Read the current knowledge_base_path from `oks config show` output. */
+function readOksKnowledgeBasePath(): string {
+  try {
+    const { stdout } = require('node:child_process').execSync(`${oksBin()} config show`, { encoding: 'utf-8', timeout: 5000 })
+    const m = stdout.match(/\/\S+/)
+    return m ? m[0] : ''
+  } catch { return '' }
+}
+
+/** Write settings/recall.yaml from the namespace value (hand-rolled YAML). */
+function writeRecallYaml(kbPath: string, cfg: OksConfig): void {
+  const yaml = `# OKS recall 参数 — managed by dsh-oks plugin\nrecall:\n  floor: ${cfg.recall_floor ?? 0.7}\n  topn: ${cfg.recall_topn ?? 3}\n  minlen: ${cfg.recall_minlen ?? 6}\n  cooldown: ${cfg.recall_cooldown ?? 10}\nposttool:\n  floor: ${cfg.posttool_floor ?? 0.9}\n  topn: ${cfg.posttool_topn ?? 2}\n  mode: ${cfg.posttool_mode ?? 'signal'}\n  recall: 1\n  signal_rel_floor: ${cfg.posttool_signal_rel_floor ?? 2.5}\nsearch_backend: ${cfg.search_backend ?? 'native'}\n`
+  const { writeFileSync, mkdirSync } = require('node:fs')
+  const { join } = require('node:path')
+  const dir = join(kbPath, 'settings')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'recall.yaml'), yaml, 'utf-8')
 }
 
 /** Run `oks <args>` and return stdout. Throws on non-zero exit. */
@@ -64,9 +110,10 @@ export const inject = ['tools']
 
 export function apply(ctx: Context, config: OksConfig = {}) {
   // ── Settings namespace (Host half) — pairs with browser RecallParamsCard ──
+  let current: OksConfig = config
   installSettingsSection(ctx, OKS_NS, OksConfigSchema, config, {
-    // oks reads settings/recall.yaml at call time; no hot-reload needed.
-    onChange: () => {},
+    setSource: (src) => { current = src() },
+    onChange: () => { syncOksConfig(current) },
   })
 
   // ── Tool: oks_recall ────────────────────────────────────────────────
