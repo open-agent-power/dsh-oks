@@ -1,5 +1,19 @@
 # oks-recall
 
+## 主动验证猜想（核心心智）
+
+**不确定时先 recall 验证，别凭记忆猜。** 你脑子里记的不一定准——wiki 里可能已有更可靠的沉淀。
+- 想用某个模式但不确定细节 → 先 recall，别猜
+- 觉得“之前好像做过” → 先 recall 确认，别重复踩坑
+- 模糊任务 → 传 `queries: string[]`（5-6 个替代措辞）并行 fan-out，按 slug 去重合并 → 覆盖更广
+
+```
+oks_recall(
+  query: "git branch",
+  queries: ["branch strategy", "trunk-based", "git flow", "release flow"]
+)
+```
+
 ## 何时用 oks_recall
 
 任务涉及以下情况时，调 `oks_recall`：

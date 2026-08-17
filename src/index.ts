@@ -188,6 +188,8 @@ function parseRecall(stdout: string): ParsedRecall | null {
     const slugs = items.map(m => 'slug' in m ? (m.slug ?? '') : (m as EpisodicHit).source_path ?? '').filter(Boolean)
     const injectId = randomUUID().slice(0, 8)
     const out = ['<recalled-memory source="oks">', lines.join('\n'), '',
+      '[主动验证] 不确定时调 oks_recall 验证猜想（比凭记忆猜可靠）。\n' +
+      '模糊任务传 queries: string[]（5-6 个替代措辞）并行 fan-out，按 slug 去重合并 → 覆盖更广。\n\n' +
       '[自评闭环] 埋点由你（AI）代填（人类懒惰不手动）：\n' +
       '1. 你实际引用了的记忆 → 调 `oks wiki use <slug>`（标 used + access_count++）\n' +
       '2. 观察用户后续回复——用户接受/引用了某条 → 代调 `oks wiki use <slug>`；' +
