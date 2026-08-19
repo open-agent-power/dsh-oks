@@ -76,7 +76,7 @@ function oksBin(): string {
 async function syncOksConfig(cfg: OksConfig): Promise<void> {
   try {
     if (cfg.knowledge_base_path) {
-      await execAsync(`${oksBin()} config set knowledge_base_path "${cfg.knowledge_base_path.replace(/"/g, '\\"')}"`)
+      await execAsync(oksBin(), ['config', 'set', 'knowledge_base_path', cfg.knowledge_base_path], { timeout: 5000 })
         .catch(() => {})
     }
     const kbPath = cfg.knowledge_base_path || (await readOksKnowledgeBasePath())
@@ -87,7 +87,7 @@ async function syncOksConfig(cfg: OksConfig): Promise<void> {
 /** Read the current knowledge_base_path from `oks config show` output. */
 async function readOksKnowledgeBasePath(): Promise<string> {
   try {
-    const { stdout } = await execAsync(`${oksBin()} config show`, { encoding: 'utf-8', timeout: 5000 })
+    const { stdout } = await execAsync(oksBin(), ['config', 'show'], { encoding: 'utf-8', timeout: 5000 })
     const m = stdout.match(/\/\S+/)
     return m ? m[0] : ''
   } catch { return '' }

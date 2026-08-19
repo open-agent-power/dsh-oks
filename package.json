@@ -1,42 +1,56 @@
 {
   "name": "dsh-oks",
   "version": "0.1.0",
-  "description": "DeepSeek Harness plugin — visualize and query OKS knowledge base in dsh Web UI",
+  "description": "DeepSeek Harness plugin -- visualize and query the OKS knowledge base in the dsh Web UI",
   "type": "module",
   "license": "MIT",
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./client": { "default": "./lib/client.js" },
+    "./client": {
+      "default": "./lib/client.js"
+    },
     "./package.json": "./package.json"
   },
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
-      "inject": ["@deepseek-ai/dsh-client-ui-settings-plugins"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
     }
   },
   "scripts": {
     "build": "tsdown",
-    "watch": "tsdown --watch"
+    "watch": "tsdown --watch",
+    "test": "node --test test/*.test.mjs"
   },
   "files": [
-    "lib/index.js", "lib/client.js", "lib/types/**/*.d.ts"
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "skills/SKILL.md",
+    "README.md"
   ],
-  "dependencies": {
-    "@deepseek-ai/dsh-settings": "*",
-    "@deepseek-ai/dsh-tools": "*"
-  },
+  "dependencies": {},
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-client-connection": "*",
     "@deepseek-ai/dsh-client-runtime": "*",
     "@deepseek-ai/dsh-client-ui-settings-plugins": "*",
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-settings": "*",
+    "@deepseek-ai/dsh-tools": "*",
     "@deepseek-ai/schemastery": "*",
     "react": "^18.2.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-client-connection": "*",
     "@deepseek-ai/dsh-client-runtime": "*",
     "@deepseek-ai/dsh-client-ui-settings-plugins": "*",
     "@deepseek-ai/dsh-settings": "*",
@@ -46,5 +60,10 @@
     "react": "^18.2.0",
     "tsdown": "*"
   },
-  "keywords": ["dsh-plugin", "oks", "knowledge-base", "memory"]
+  "keywords": [
+    "dsh-plugin",
+    "oks",
+    "knowledge-base",
+    "memory"
+  ]
 }
