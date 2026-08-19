@@ -126,7 +126,7 @@ export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
           {/* 📦 知识库 */}
           <div style={group}>
             <div style={groupTitle}>📦 知识库</div>
-            <Field id={gid('kbp')} lab="knowledge_base_path" h="知识库地址，写 ~/.oks/config.json">
+            <Field id={gid('kbp')} lab="知识库地址" h="知识库地址，写 ~/.oks/config.json">
               <input id={gid('kbp')} style={input} type="text"
                 value={String(v.knowledge_base_path ?? '')}
                 placeholder="~/Desktop/school/repo/xinhai-knowledge-studio"
@@ -137,22 +137,22 @@ export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
           {/* 🔍 召回 */}
           <div style={group}>
             <div style={groupTitle}>🔍 召回 (recall)</div>
-            <Field id={gid('rf')} lab="floor" h="召回阈值，rel 低于此不注入">
+            <Field id={gid('rf')} lab="召回门槛" h="召回阈值，rel 低于此不注入">
               <input id={gid('rf')} style={input} type="number" step="0.05" min="0" max="1"
                 value={Number(v.recall_floor ?? 0.7)}
                 onChange={(e) => up('recall_floor', parseFloat(e.target.value))} />
             </Field>
-            <Field id={gid('rt')} lab="topn" h="每次注入最多 N 条">
+            <Field id={gid('rt')} lab="召回条数" h="每次注入最多 N 条">
               <input id={gid('rt')} style={input} type="number" step="1" min="1" max="10"
                 value={Number(v.recall_topn ?? 3)}
                 onChange={(e) => up('recall_topn', parseInt(e.target.value, 10))} />
             </Field>
-            <Field id={gid('rm')} lab="minlen" h="query 短于此跳过">
+            <Field id={gid('rm')} lab="最短问题长度" h="用户问题短于此长度时跳过召回">
               <input id={gid('rm')} style={input} type="number" step="1" min="1" max="50"
                 value={Number(v.recall_minlen ?? 6)}
                 onChange={(e) => up('recall_minlen', parseInt(e.target.value, 10))} />
             </Field>
-            <Field id={gid('rc')} lab="cooldown" h="同 query N 轮不重复">
+            <Field id={gid('rc')} lab="冷却轮数" h="相同问题在 N 轮内不重复召回">
               <input id={gid('rc')} style={input} type="number" step="1" min="0" max="100"
                 value={Number(v.recall_cooldown ?? 10)}
                 onChange={(e) => up('recall_cooldown', parseInt(e.target.value, 10))} />
@@ -162,12 +162,12 @@ export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
           {/* ⚡ pre-step hook（确定性每轮注入） */}
           <div style={group}>
             <div style={groupTitle}>⚡ pre-step hook（确定性每轮注入）</div>
-            <Field id={gid('pf')} lab="prestep_floor" h="pre-step 专用更高门槛，过滤噪音（默认 0.85）">
+            <Field id={gid('pf')} lab="前置召回门槛" h="前置步骤使用更高门槛，过滤噪音（默认 0.85）">
               <input id={gid('pf')} style={input} type="number" step="0.05" min="0" max="1"
                 value={Number(v.prestep_floor ?? 0.85)}
                 onChange={(e) => up('prestep_floor', parseFloat(e.target.value))} />
             </Field>
-            <Field id={gid('pk')} lab="prestep_knowledge_only" h="只注入 wiki，不注入 episodic raw">
+            <Field id={gid('pk')} lab="仅注入 Wiki" h="只注入 Wiki，不注入原始资料（episodic Raw）">
               <input id={gid('pk')} type="checkbox" checked={Boolean(v.prestep_knowledge_only ?? true)}
                 onChange={(e) => up('prestep_knowledge_only', e.target.checked)} />
             </Field>
@@ -175,25 +175,25 @@ export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
 
           {/* 🛠 PostToolUse */}
           <div style={group}>
-            <div style={groupTitle}>🛠 PostToolUse（工具后补提醒）</div>
-            <Field id={gid('pm')} lab="mode" h="注入模式">
+            <div style={groupTitle}>🛠 PostToolUse（工具执行后补充提醒）</div>
+            <Field id={gid('pm')} lab="注入模式" h="注入模式">
               <select id={gid('pm')} style={input} value={String(v.posttool_mode ?? 'signal')}
                 onChange={(e) => up('posttool_mode', e.target.value)}>
-                <option value="signal">signal（只 slug+rel，默认）</option>
-                <option value="full">full（注入 body）</option>
+                <option value="signal">signal（仅注入 slug 和相关度，默认）</option>
+                <option value="full">full（注入正文）</option>
               </select>
             </Field>
-            <Field id={gid('ps')} lab="signal_rel_floor" h="J 模式 rel 门槛，极高才注入">
+            <Field id={gid('ps')} lab="信号门槛" h="信号模式的相关度门槛，达到较高值才注入">
               <input id={gid('ps')} style={input} type="number" step="0.1" min="0" max="10"
                 value={Number(v.posttool_signal_rel_floor ?? 2.5)}
                 onChange={(e) => up('posttool_signal_rel_floor', parseFloat(e.target.value))} />
             </Field>
-            <Field id={gid('pfl')} lab="floor" h="工具 query 的召回阈值">
+            <Field id={gid('pfl')} lab="工具召回门槛" h="工具查询的召回阈值">
               <input id={gid('pfl')} style={input} type="number" step="0.05" min="0" max="1"
                 value={Number(v.posttool_floor ?? 0.9)}
                 onChange={(e) => up('posttool_floor', parseFloat(e.target.value))} />
             </Field>
-            <Field id={gid('pt')} lab="topn" h="PostToolUse 注入最多 N 条">
+            <Field id={gid('pt')} lab="工具注入条数" h="工具执行后最多注入 N 条">
               <input id={gid('pt')} style={input} type="number" step="1" min="1" max="10"
                 value={Number(v.posttool_topn ?? 2)}
                 onChange={(e) => up('posttool_topn', parseInt(e.target.value, 10))} />
@@ -203,12 +203,12 @@ export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
           {/* 🔎 搜索后端 */}
           <div style={group}>
             <div style={groupTitle}>🔎 搜索后端</div>
-            <Field id={gid('sb')} lab="search_backend" h="召回后端引擎">
+            <Field id={gid('sb')} lab="搜索后端" h="召回后端引擎">
               <select id={gid('sb')} style={input} value={String(v.search_backend ?? 'native')}
                 onChange={(e) => up('search_backend', e.target.value)}>
-                <option value="native">native（6+1 因子，默认）</option>
-                <option value="fts5">fts5（SQLite FTS5 + BM25）</option>
-                <option value="fusion">fusion（native + fts5 补盲）</option>
+                <option value="native">native（6+1 因子召回，默认）</option>
+                <option value="fts5">fts5（SQLite FTS5 全文检索 + BM25）</option>
+                <option value="fusion">fusion（native + fts5 组合补充）</option>
               </select>
             </Field>
           </div>
@@ -220,8 +220,8 @@ export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
               <span style={label}>闭环已启用</span>
               <span style={hint}>
                 每次注入带 inject_id 标记 → AI 答完后调 oks_inject_feedback 打分
-                （useful/noise/irrelevant）→ 写 ~/.oks/inject_feedback.log →
-                调 oks_inject_stats 或 oks_metrics 查看统计 → noise 多则调高 prestep_floor。
+                （有用/噪声/不相关）→ 写 ~/.oks/inject_feedback.log →
+                调 oks_inject_stats 或 oks_metrics 查看统计 → 噪声较多时调高前置召回门槛。
               </span>
             </div>
           </div>
