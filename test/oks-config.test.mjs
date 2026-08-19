@@ -1,9 +1,9 @@
-import assert from 'node:assert/strict'
+﻿import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { createDynamicSettingsHooks, parseOksKnowledgeBasePath, writeRecallYaml } from '../src/oks-config.ts'
+import { clearOksKnowledgeBasePath, createDynamicSettingsHooks, parseOksKnowledgeBasePath, writeRecallYaml } from '../src/oks-config.ts'
 
 const frame = '\u2502'
 const expectedPath = 'C:\\oks-fixture\\knowledge-base'
@@ -129,4 +129,14 @@ test('patches the user-facing prestep enabled switch without disturbing other se
   } finally {
     if (root.startsWith(resolve(tmpdir()) + '\\')) await rm(root, { recursive: true, force: true })
   }
+})
+
+test('clears only the OKS global knowledge-base pointer and preserves other config', async () => {
+  const root = resolve(await mkdtemp(join(tmpdir(), 'dsh-oks-config-clear-')))
+  try {
+    const configPath = join(root, 'config.json')
+    await writeFile(configPath, JSON.stringify({ knowledge_base_path: 'D:\\old-kb', strategy: 'quality', custom: { keep: true } }, null, 2), 'utf8')
+    clearOksKnowledgeBasePath(configPath)
+    assert.deepEqual(JSON.parse(await readFile(configPath, 'utf8')), { knowledge_base_path: '', strategy: 'quality', custom: { keep: true } })
+  } finally { await rm(root, { recursive: true, force: true }) }
 })

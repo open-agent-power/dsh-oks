@@ -1,7 +1,7 @@
 ﻿/** Read-only, bounded inspection of the configured OKS instance. */
 import { readdir, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { countRawBundles } from './raw-browser.ts'
+import { listRawBundles } from './raw-browser.ts'
 
 export interface OksOverview {
   connected: true
@@ -9,6 +9,7 @@ export interface OksOverview {
   draftCount: number
   rawFileCount: number
   rawBundleCount: number
+  truncated?: boolean
 }
 
 export type OksConnectionStatus =
@@ -32,26 +33,49 @@ export interface OksDiagnostics {
   draftCount: number
   rawFileCount: number
   rawBundleCount: number
+  truncated?: boolean
 }
 
-async function countFiles(root: string, include: (name: string) => boolean): Promise<number> {
-  let total = 0
-  async function visit(directory: string): Promise<void> {
+const MAX_SCAN_DIRECTORIES = 2_000
+const MAX_SCANNED_FILES = 1_000
+
+async function countFiles(root: string, include: (name: string) => boolean): Promise<{ count: number; truncated: boolean }> {
+  let count = 0
+  let scannedDirectories = 0
+  let scannedFiles = 0
+  let truncated = false
+  const pending = [resolve(root)]
+  while (pending.length > 0 && !truncated) {
+    const directory = pending.pop()!
+    scannedDirectories++
+    if (scannedDirectories > MAX_SCAN_DIRECTORIES) {
+      truncated = true
+      break
+    }
     let entries
     try { entries = await readdir(directory, { withFileTypes: true }) }
     catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
       throw error
     }
-    await Promise.all(entries.map(async entry => {
-      if (entry.name === '.gitkeep') return
+    for (const entry of entries) {
+      if (entry.name === '.gitkeep') continue
       const file = join(directory, entry.name)
-      if (entry.isDirectory()) return visit(file)
-      if (entry.isFile() && include(entry.name)) total++
-    }))
+      if (entry.isDirectory()) {
+        if (scannedDirectories + pending.length < MAX_SCAN_DIRECTORIES) pending.push(file)
+        else truncated = true
+        continue
+      }
+      if (!entry.isFile()) continue
+      scannedFiles++
+      if (scannedFiles > MAX_SCANNED_FILES) {
+        truncated = true
+        break
+      }
+      if (include(entry.name)) count++
+    }
   }
-  await visit(resolve(root))
-  return total
+  return { count, truncated }
 }
 
 async function isDirectory(path: string): Promise<boolean> {
@@ -61,13 +85,21 @@ async function isDirectory(path: string): Promise<boolean> {
 
 /** Count the three lifecycle layers without exposing the local root path. */
 export async function getOksOverview(knowledgeBasePath: string): Promise<OksOverview> {
-  const [wikiCount, draftCount, rawFileCount, rawBundleCount] = await Promise.all([
+  const [wiki, drafts, raw, rawBundles] = await Promise.all([
     countFiles(join(knowledgeBasePath, 'wiki'), name => name.toLowerCase().endsWith('.md')),
     countFiles(join(knowledgeBasePath, 'drafts'), name => name.toLowerCase().endsWith('.md')),
     countFiles(join(knowledgeBasePath, 'raw'), () => true),
-    countRawBundles(knowledgeBasePath),
+    listRawBundles(knowledgeBasePath),
   ])
-  return { connected: true, wikiCount, draftCount, rawFileCount, rawBundleCount }
+  const truncated = wiki.truncated || drafts.truncated || raw.truncated || rawBundles.truncated
+  return {
+    connected: true,
+    wikiCount: wiki.count,
+    draftCount: drafts.count,
+    rawFileCount: raw.count,
+    rawBundleCount: rawBundles.total,
+    ...(truncated ? { truncated: true } : {}),
+  }
 }
 
 /**

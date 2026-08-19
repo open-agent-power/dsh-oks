@@ -5,17 +5,21 @@
  * configured knowledge-base root, then exposes safe slugs and display data
  * over Connection RPC.
  */
-import { readdir, readFile } from 'node:fs/promises'
+import { open, readdir } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 
 export interface WikiListFilters { query?: string; area?: string; type?: string }
 export interface WikiSummary { slug: string; title: string; area: string; type: string; summary: string; created: string }
 export interface WikiDetail extends WikiSummary { body: string; bodyTruncated: boolean }
-export interface WikiListResult { total: number; items: WikiSummary[]; areas: string[]; types: string[] }
+export interface WikiListResult { total: number; items: WikiSummary[]; areas: string[]; types: string[]; truncated?: boolean }
 interface SearchItem { page: WikiSummary; searchText: string }
 
 const MAX_QUERY_CHARS = 120
 const MAX_DETAIL_BODY_CHARS = 60_000
+const MAX_MARKDOWN_FILE_BYTES = 512 * 1024
+const MAX_TOTAL_READ_BYTES = 8 * 1024 * 1024
+const MAX_MARKDOWN_FILES = 1_000
+const MAX_SCAN_DIRECTORIES = 2_000
 
 function text(value: unknown): string { return typeof value === 'string' ? value.trim() : '' }
 function yamlScalar(value: string): string {
@@ -48,20 +52,53 @@ function displaySummary(markdown: string): string {
 }
 function titleFromBody(body: string): string { return /^#\s+(.+)$/m.exec(body)?.[1]?.trim() ?? '' }
 function slugFromPath(root: string, file: string): string { return relative(root, file).split(sep).join('/').replace(/\.md$/i, '') }
-async function markdownFiles(root: string): Promise<string[]> {
-  const out: string[] = []
-  async function visit(directory: string): Promise<void> {
+async function markdownFiles(root: string): Promise<{ files: string[]; truncated: boolean }> {
+  const files: string[] = []
+  const pending = [root]
+  let scannedDirectories = 0
+  let truncated = false
+  while (pending.length > 0 && !truncated) {
+    const directory = pending.pop()!
+    scannedDirectories++
+    if (scannedDirectories > MAX_SCAN_DIRECTORIES) {
+      truncated = true
+      break
+    }
     let entries
     try { entries = await readdir(directory, { withFileTypes: true }) }
-    catch (error: unknown) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
-    await Promise.all(entries.map(async entry => {
+    catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw error
+    }
+    for (const entry of entries) {
+      if (entry.name === '.gitkeep') continue
       const file = join(directory, entry.name)
-      if (entry.isDirectory()) return visit(file)
-      if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) out.push(file)
-    }))
+      if (entry.isDirectory()) {
+        if (scannedDirectories + pending.length < MAX_SCAN_DIRECTORIES) pending.push(file)
+        else truncated = true
+        continue
+      }
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue
+      if (files.length >= MAX_MARKDOWN_FILES) {
+        truncated = true
+        break
+      }
+      files.push(file)
+    }
   }
-  await visit(root)
-  return out
+  return { files, truncated }
+}
+async function readBoundedUtf8(file: string, maxBytes: number): Promise<{ text: string; bytesRead: number; truncated: boolean }> {
+  const handle = await open(file, 'r')
+  try {
+    const size = (await handle.stat()).size
+    const length = Math.max(0, Math.min(size, maxBytes))
+    const buffer = Buffer.alloc(length)
+    const { bytesRead } = length > 0 ? await handle.read(buffer, 0, length, 0) : { bytesRead: 0 }
+    return { text: buffer.subarray(0, bytesRead).toString('utf8'), bytesRead, truncated: size > maxBytes }
+  } finally {
+    await handle.close()
+  }
 }
 function summaryFromSource(root: string, file: string, source: string): SearchItem {
   const { meta, body } = readFrontmatter(source)
@@ -76,14 +113,31 @@ function summaryFromSource(root: string, file: string, source: string): SearchIt
   }
   return { page, searchText: `${page.title}\n${page.area}\n${page.type}\n${body}`.toLocaleLowerCase() }
 }
-async function readSearchItem(root: string, file: string): Promise<SearchItem> { return summaryFromSource(root, file, await readFile(file, 'utf8')) }
+async function readSearchItem(root: string, file: string, maxBytes: number): Promise<{ item: SearchItem; bytesRead: number; truncated: boolean }> {
+  const bounded = await readBoundedUtf8(file, maxBytes)
+  return { item: summaryFromSource(root, file, bounded.text), bytesRead: bounded.bytesRead, truncated: bounded.truncated }
+}
 function comparePages(a: WikiSummary, b: WikiSummary): number { return b.created.localeCompare(a.created) || a.title.localeCompare(b.title, 'zh-Hans-CN') }
 function normalizeFilter(value: unknown): string { return text(value).slice(0, MAX_QUERY_CHARS) }
 
 /** List markdown pages under one lifecycle directory. */
 export async function listMarkdownPages(knowledgeBasePath: string, directory: 'wiki' | 'drafts', filters: WikiListFilters = {}): Promise<WikiListResult> {
   const root = resolve(knowledgeBasePath, directory)
-  const pages = await Promise.all((await markdownFiles(root)).map(file => readSearchItem(root, file)))
+  const scan = await markdownFiles(root)
+  const pages: SearchItem[] = []
+  let totalReadBytes = 0
+  let truncated = scan.truncated
+  // Sequential, budgeted reads avoid unbounded fan-out over user-controlled files.
+  for (const file of scan.files) {
+    if (totalReadBytes >= MAX_TOTAL_READ_BYTES) {
+      truncated = true
+      break
+    }
+    const read = await readSearchItem(root, file, Math.min(MAX_MARKDOWN_FILE_BYTES, MAX_TOTAL_READ_BYTES - totalReadBytes))
+    totalReadBytes += read.bytesRead
+    truncated ||= read.truncated
+    pages.push(read.item)
+  }
   pages.sort((a, b) => comparePages(a.page, b.page))
   const query = normalizeFilter(filters.query).toLocaleLowerCase()
   const area = normalizeFilter(filters.area)
@@ -93,6 +147,7 @@ export async function listMarkdownPages(knowledgeBasePath: string, directory: 'w
     items: pages.filter(({ page, searchText }) => (!query || searchText.includes(query)) && (!area || page.area === area) && (!type || page.type === type)).map(({ page }) => page),
     areas: [...new Set(pages.map(({ page }) => page.area))].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN')),
     types: [...new Set(pages.map(({ page }) => page.type))].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN')),
+    ...(truncated ? { truncated: true } : {}),
   }
 }
 
@@ -100,12 +155,12 @@ export async function getMarkdownPage(knowledgeBasePath: string, directory: 'wik
   const slug = normalizeFilter(requestedSlug)
   if (!slug) return undefined
   const root = resolve(knowledgeBasePath, directory)
-  const file = (await markdownFiles(root)).find(candidate => slugFromPath(root, candidate) === slug)
+  const file = (await markdownFiles(root)).files.find(candidate => slugFromPath(root, candidate) === slug)
   if (!file) return undefined
-  const source = await readFile(file, 'utf8')
-  const { page } = summaryFromSource(root, file, source)
-  const { body } = readFrontmatter(source)
-  return { ...page, body: body.slice(0, MAX_DETAIL_BODY_CHARS), bodyTruncated: body.length > MAX_DETAIL_BODY_CHARS }
+  const bounded = await readBoundedUtf8(file, MAX_MARKDOWN_FILE_BYTES)
+  const { page } = summaryFromSource(root, file, bounded.text)
+  const { body } = readFrontmatter(bounded.text)
+  return { ...page, body: body.slice(0, MAX_DETAIL_BODY_CHARS), bodyTruncated: bounded.truncated || body.length > MAX_DETAIL_BODY_CHARS }
 }
 
 /** Read-only Wiki aliases retained for the existing RPC contract. */

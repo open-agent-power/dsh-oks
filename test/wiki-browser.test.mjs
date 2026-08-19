@@ -69,3 +69,28 @@ test('truncates a very long page body', async () => {
     assert.equal(detail?.bodyTruncated, true)
   } finally { await cleanup(root) }
 })
+
+test('bounds large markdown reads and exposes a partial-scan marker', async () => {
+  const root = resolve(await mkdtemp(join(tmpdir(), 'dsh-oks-wiki-limit-')))
+  try {
+    await mkdir(join(root, 'wiki'), { recursive: true })
+    await writeFile(join(root, 'wiki', 'large.md'), `---\ntitle: Large page\n---\n\n${'x'.repeat(600_000)}`, 'utf8')
+    const list = await listWikiPages(root)
+    assert.equal(list.total, 1)
+    assert.equal(list.truncated, true)
+    const detail = await getWikiPage(root, 'large')
+    assert.equal(detail?.bodyTruncated, true)
+    assert.equal(detail?.body.length, 60_000)
+  } finally { await cleanup(root) }
+})
+
+test('caps page discovery instead of reading an unbounded directory', async () => {
+  const root = resolve(await mkdtemp(join(tmpdir(), 'dsh-oks-wiki-count-limit-')))
+  try {
+    await mkdir(join(root, 'wiki'), { recursive: true })
+    for (let index = 0; index < 1_005; index++) await writeFile(join(root, 'wiki', `page-${String(index).padStart(4, '0')}.md`), `# page ${index}`, 'utf8')
+    const list = await listWikiPages(root)
+    assert.equal(list.total, 1_000)
+    assert.equal(list.truncated, true)
+  } finally { await cleanup(root) }
+})

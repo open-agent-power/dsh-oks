@@ -1,6 +1,7 @@
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { homedir } from 'node:os'
 
 export interface RecallConfig {
   recall_floor?: number
@@ -31,6 +32,43 @@ export function parseOksKnowledgeBasePath(stdout: string): string {
     if (candidate.startsWith('Strategy')) break
   }
   return ''
+}
+
+/** Return the global config path used by the OKS CLI. */
+export function oksConfigPath(home = homedir()): string {
+  return join(home, '.oks', 'config.json')
+}
+
+/**
+ * Clear the active knowledge-base pointer without invoking oks config set.
+ * The CLI treats an empty positional value as the current directory, which is
+ * unsafe for a settings "disconnect" action. Preserve all other config keys
+ * and use an atomic replacement so a failed write cannot leave a partial file.
+ */
+export function clearOksKnowledgeBasePath(configPath = oksConfigPath()): void {
+  let config: Record<string, unknown> = {}
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(configPath, 'utf8'))
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) config = parsed as Record<string, unknown>
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  config.knowledge_base_path = ''
+  const directory = dirname(configPath)
+  mkdirSync(directory, { recursive: true })
+  const temporary = join(directory, '.config.' + process.pid + '.' + randomUUID() + '.tmp')
+  let fd: number | undefined
+  try {
+    fd = openSync(temporary, 'wx')
+    writeFileSync(fd, JSON.stringify(config, null, 2) + '\n', 'utf8')
+    fsyncSync(fd)
+    closeSync(fd)
+    fd = undefined
+    renameSync(temporary, configPath)
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+    try { unlinkSync(temporary) } catch { /* already renamed or never created */ }
+  }
 }
 
 // Shared across plugin instances so a provider reload cannot let old and new

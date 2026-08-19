@@ -19,7 +19,7 @@ import { getRawBundle, listRawBundles } from './raw-browser.ts'
 import { getOksDiagnostics, getOksOverview } from './oks-overview.ts'
 import { isPrestepRecallEnabled } from './prestep-control.ts'
 import { resolveOksBin } from './oks-runtime.ts'
-import { createDynamicSettingsHooks, parseOksKnowledgeBasePath, writeRecallYaml } from './oks-config.ts'
+import { clearOksKnowledgeBasePath, createDynamicSettingsHooks, parseOksKnowledgeBasePath, writeRecallYaml } from './oks-config.ts'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type { RpcResult } from '@deepseek-ai/dsh-client-connection'
@@ -88,9 +88,16 @@ function warnSync(stage: string, error: unknown): void {
  * (~/.oks/config.json); recall/posttool/search values use settings/recall.yaml.
  */
 async function syncOksConfig(cfg: OksConfig, changed: ReadonlySet<string>): Promise<void> {
-  if (changed.has('knowledge_base_path') && cfg.knowledge_base_path) {
+  if (changed.has('knowledge_base_path')) {
+    const knowledgeBasePath = cfg.knowledge_base_path?.trim() ?? ''
     try {
-      await execAsync(oksBin(), ['config', 'set', 'knowledge_base_path', cfg.knowledge_base_path])
+      if (knowledgeBasePath) {
+        await execAsync(oksBin(), ['config', 'set', 'knowledge_base_path', knowledgeBasePath])
+      } else {
+        // The CLI resolves an empty positional path to cwd, so disconnect by
+        // atomically clearing only the global config pointer instead.
+        clearOksKnowledgeBasePath()
+      }
     } catch (error) {
       warnSync('knowledge_base_path update', error)
     }
@@ -99,7 +106,13 @@ async function syncOksConfig(cfg: OksConfig, changed: ReadonlySet<string>): Prom
   const recallChanged = new Set([...changed].filter(key => key !== 'knowledge_base_path'))
   if (recallChanged.size === 0) return
 
-  const kbPath = cfg.knowledge_base_path || (await readOksKnowledgeBasePath())
+  // A path change is authoritative: an explicit empty value means disconnected
+  // and must not fall back to the previous global path. For ordinary recall
+  // changes, however, the Host may omit knowledge_base_path from its snapshot;
+  // use the existing OKS global pointer so recall.yaml still gets updated.
+  const pathChanged = changed.has('knowledge_base_path')
+  const kbPath = cfg.knowledge_base_path?.trim()
+    || (!pathChanged ? await readOksKnowledgeBasePath() : '')
   if (!kbPath) {
     console.warn('[dsh-oks] recall.yaml write skipped: knowledge base path is empty')
     return

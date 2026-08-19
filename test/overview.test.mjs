@@ -62,3 +62,15 @@ test('diagnostics reports a complete local OKS root and current counts', async (
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('bounds overview file scans and reports truncation without exposing paths', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-oks-overview-limit-'))
+  try {
+    await mkdir(join(root, 'wiki'), { recursive: true })
+    for (let index = 0; index < 1_005; index++) await writeFile(join(root, 'wiki', `page-${index}.md`), '# page', 'utf8')
+    const overview = await getOksOverview(root)
+    assert.equal(overview.truncated, true)
+    assert.equal(overview.wikiCount <= 1_000, true)
+    assert.equal(JSON.stringify(overview).includes(root), false)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
