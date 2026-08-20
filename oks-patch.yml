@@ -1,5 +1,0 @@
-# 开发用 --patch 覆盖层（不需要 pnpm add）
-# 用法: dsh --profile web --patch ./oks-patch.yml "任务"
-- insert:
-    - id: oks
-      name: /Users/xinhai/Desktop/school/repo/dsh-oks/src/index.ts
