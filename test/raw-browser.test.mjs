@@ -18,7 +18,7 @@ async function createFixture() {
   await writeFile(join(second, 'raw.md'), '# Raw B\n\nAwaiting processing.', 'utf8')
   return root
 }
-async function cleanup(root) { if (root.startsWith(resolve(tmpdir()) + '\\')) await rm(root, { recursive: true, force: true }) }
+async function cleanup(root) { await rm(root, { recursive: true, force: true }) }
 
 test('lists Raw Bundle v0.2 evidence by bundle rather than raw file', async () => {
   const root = await createFixture()

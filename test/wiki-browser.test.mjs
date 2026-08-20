@@ -12,7 +12,7 @@ async function createFixture() {
   await writeFile(join(root, 'wiki', 'welcome.md'), ['---', 'title: Team welcome', 'type: concept', 'area: teamwork', 'created: 2026-08-18', '---', '', 'Welcome to the knowledge base.'].join('\n'), 'utf8')
   return root
 }
-async function cleanup(root) { if (root.startsWith(resolve(tmpdir()) + '\\')) await rm(root, { recursive: true, force: true }) }
+async function cleanup(root) { await rm(root, { recursive: true, force: true }) }
 
 test('lists Wiki pages with metadata, full-text search, and filters', async () => {
   const root = await createFixture()

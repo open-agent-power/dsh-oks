@@ -96,7 +96,7 @@ test('patches only changed recall.yaml keys and preserves owner content', async 
     assert.match(out, /search_backend: native # owner choice/)
     assert.deepEqual((await readdir(join(root, 'settings'))).sort(), ['recall.yaml'])
   } finally {
-    if (root.startsWith(resolve(tmpdir()) + '\\')) await rm(root, { recursive: true, force: true })
+    await rm(root, { recursive: true, force: true })
   }
 })
 
@@ -113,7 +113,7 @@ test('creates a complete default recall.yaml including inject configuration', as
     assert.match(out, /conflict:/)
     assert.match(out, /search_backend: native/)
   } finally {
-    if (root.startsWith(resolve(tmpdir()) + '\\')) await rm(root, { recursive: true, force: true })
+    await rm(root, { recursive: true, force: true })
   }
 })
 
@@ -127,7 +127,7 @@ test('patches the user-facing prestep enabled switch without disturbing other se
     assert.match(out, /recall:\n  floor: 0\.7/)
     assert.match(out, /posttool:/)
   } finally {
-    if (root.startsWith(resolve(tmpdir()) + '\\')) await rm(root, { recursive: true, force: true })
+    await rm(root, { recursive: true, force: true })
   }
 })
 
