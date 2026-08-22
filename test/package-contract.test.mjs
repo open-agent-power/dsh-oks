@@ -11,6 +11,8 @@ test('package contract ships built host and client entries', async () => {
   assert.ok(packageJson.files.includes('src/**/*.tsx'))
   assert.ok(packageJson.files.includes('lib/client.js'))
   assert.ok(packageJson.files.includes('lib/index.mjs'))
+  assert.ok(packageJson.files.includes('SKILL.md'))
+  assert.ok(packageJson.files.includes('skills/oks-case-init/SKILL.md'))
   assert.ok(!packageJson.files.includes('lib/client.js.map'))
   assert.ok(!packageJson.files.includes('docs/**/*.md'))
   assert.ok(!packageJson.files.includes('skills/**/*.md'))

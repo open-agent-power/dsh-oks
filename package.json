@@ -37,7 +37,9 @@
     "lib/client.js",
     "lib/index.mjs",
     "cordis.patch.yml",
+    "SKILL.md",
     "skills/SKILL.md",
+    "skills/oks-case-init/SKILL.md",
     "README.md"
   ],
   "dependencies": {},
