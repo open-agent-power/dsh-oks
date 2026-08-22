@@ -7,15 +7,17 @@ const read = (file) => readFile(new URL(file, root), 'utf8')
 const zh = (...codes) => String.fromCodePoint(...codes)
 
 test('client UI keeps Chinese navigation and safe settings bindings', async () => {
-  const [panel, browser, params] = await Promise.all([
+  const [panel, browser, params, clientIndex] = await Promise.all([
     read('src/client/OksPanel.tsx'),
     read('src/client/WikiBrowser.tsx'),
     read('src/client/RecallParamsCard.tsx'),
+    read('src/client/index.ts'),
   ])
 
   assert.ok(panel.includes(zh(30693, 35782)))
   assert.ok(panel.includes(zh(31995, 32479, 35774, 32622)))
   assert.ok(panel.includes("scope.set('prestep_enabled', next)"))
+  assert.match(clientIndex, /name: 'settings\.plugin\.item', key: 'oks'/)
 
   assert.ok(browser.includes(zh(8592, 32, 36820, 22238, 21015, 34920)))
   assert.ok(browser.includes('onClick={() => setSelected(undefined)}'))

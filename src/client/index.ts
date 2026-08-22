@@ -22,10 +22,7 @@ export function apply(ctx: ClientContext): void {
 
   // 1. Compatibility card under Settings → Plugins.
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register(
-    // settings.plugin.item is a keyed slot dispatched on `options.key`
-    // (tab-store.ts reads entry.options.key; ConfigurablePluginsTab
-    // renderSlot(..., { entryKey: ns })). Using `id` here leaves options.key
-    // undefined, so the card never reaches the Plugins tab.
+    // rc.8 dispatches this keyed slot from `options.key`.
     { name: 'settings.plugin.item', key: 'oks', inject: () => ({}) },
     settingsCard,
   ))

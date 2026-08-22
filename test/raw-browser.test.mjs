@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import test from 'node:test'
 import { getRawBundle, listRawBundles } from '../src/raw-browser.ts'
 
@@ -18,7 +18,10 @@ async function createFixture() {
   await writeFile(join(second, 'raw.md'), '# Raw B\n\nAwaiting processing.', 'utf8')
   return root
 }
-async function cleanup(root) { await rm(root, { recursive: true, force: true }) }
+async function cleanup(root) {
+  const rel = relative(resolve(tmpdir()), root)
+  if (rel && !rel.startsWith('..') && !isAbsolute(rel)) await rm(root, { recursive: true, force: true })
+}
 
 test('lists Raw Bundle v0.2 evidence by bundle rather than raw file', async () => {
   const root = await createFixture()
