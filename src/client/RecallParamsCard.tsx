@@ -9,7 +9,7 @@
  * Groups: 知识库 / 召回 / PostToolUse / 搜索后端. Each field writes via
  * scope.set → Host half onChange syncs to ~/.oks/config.json + recall.yaml.
  */
-import { useSyncExternalStore, type ReactNode } from 'react'
+import { useState, useSyncExternalStore, type ReactNode } from 'react'
 
 export interface OksScope {
   getSnapshot: () => {
@@ -30,6 +30,7 @@ export interface RecallParamsCardProps {
 const FALLBACK = {
   knowledge_base_path: '',
   recall_floor: 0.7, recall_topn: 3, recall_minlen: 6, recall_cooldown: 10,
+  prestep_enabled: true,
   prestep_floor: 0.85, prestep_knowledge_only: true,
   posttool_mode: 'signal', posttool_floor: 0.9, posttool_topn: 2, posttool_signal_rel_floor: 2.5,
   search_backend: 'native',
@@ -104,25 +105,30 @@ export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
   const v = { ...FALLBACK, ...(snap.value ?? {}) } as Record<string, unknown>
   const up = (f: string, val: unknown) => { void scope.set(f, val) }
   const gid = (s: string) => `oks-${s}`
+  const [expanded, setExpanded] = useState(false)
 
   return (
     <div style={card}>
-      {/* Header — mirror PluginCard.header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px' }}>
+      {/* Header — mirror the host plugin accordion and keep the page compact by default. */}
+      <button type="button" aria-expanded={expanded} aria-controls="oks-settings-content"
+        onClick={() => setExpanded(value => !value)}
+        style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', border: 0, padding: '14px 16px', background: 'transparent', color: T.labelPrimary, textAlign: 'left', cursor: 'pointer' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.4, color: T.labelPrimary }}>OKS 知识库配置</div>
           <div style={{ fontSize: 12, lineHeight: 1.45, color: T.labelSecondary }}>
-            改 → 自动写 ~/.oks/config.json + settings/recall.yaml
+            {expanded ? '改 → 自动写 ~/.oks/config.json + settings/recall.yaml' : `当前：recall ${Number(v.recall_floor ?? 0.7)} · 每次 ${Number(v.recall_topn ?? 3)} 条`}
           </div>
         </div>
-      </div>
+        <span aria-hidden="true" style={{ flex: '0 0 auto', color: T.labelSecondary, fontSize: 16 }}>{expanded ? '⌃' : '⌄'}</span>
+      </button>
 
-      {!snap.writable ? (
-        <div style={{ padding: '0 16px 14px' }}>
-          <p style={{ margin: 0, color: T.labelSecondary, fontSize: 13 }}>只读</p>
-        </div>
-      ) : (
-        <div style={{ borderTop: `1px solid ${T.border}` }}>
+      {expanded ? <div id="oks-settings-content" role="region" aria-label="OKS 知识库配置详情" style={{ borderTop: `1px solid ${T.border}` }}>
+        {!snap.writable ? (
+          <div style={{ padding: '14px 16px' }}>
+            <p style={{ margin: 0, color: T.labelSecondary, fontSize: 13 }}>只读</p>
+          </div>
+        ) : (
+          <>
           {/* 📦 知识库 */}
           <div style={group}>
             <div style={groupTitle}>📦 知识库</div>
@@ -162,6 +168,13 @@ export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
           {/* ⚡ pre-step hook（确定性每轮注入） */}
           <div style={group}>
             <div style={groupTitle}>⚡ pre-step hook（确定性每轮注入）</div>
+            <Field id={gid('pe')} lab="自动召回" h="开启后，每轮回答前自动召回相关 Wiki；关闭后仍可手动调用 oks_recall。">
+              <button id={gid('pe')} type="button" role="switch" aria-checked={Boolean(v.prestep_enabled ?? true)}
+                onClick={() => up('prestep_enabled', !Boolean(v.prestep_enabled ?? true))}
+                style={{ alignSelf: 'flex-start', minWidth: 68, border: 0, borderRadius: 999, padding: '7px 11px', background: Boolean(v.prestep_enabled ?? true) ? T.brand : T.border, color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                {Boolean(v.prestep_enabled ?? true) ? '已开启' : '已关闭'}
+              </button>
+            </Field>
             <Field id={gid('pf')} lab="前置召回门槛" h="前置步骤使用更高门槛，过滤噪音（默认 0.85）">
               <input id={gid('pf')} style={input} type="number" step="0.05" min="0" max="1"
                 value={Number(v.prestep_floor ?? 0.85)}
@@ -226,8 +239,9 @@ export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
             </div>
           </div>
           <div style={{ height: 8 }} />
-        </div>
-      )}
+          </>
+        )}
+      </div> : null}
     </div>
   )
 }

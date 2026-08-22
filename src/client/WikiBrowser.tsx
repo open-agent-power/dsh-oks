@@ -1,8 +1,6 @@
 /** Read-only browser for the three OKS lifecycle layers: Wiki, Draft, and Raw. */
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
-
-interface RpcResult<T> { ok: boolean; value?: T; error?: { message?: string } }
-export interface OksConnectionRpc { call(channel: string, endpoint: string, payload: unknown, signal?: AbortSignal): Promise<RpcResult<unknown>> }
+import { callOksRpc, type OksConnectionRpc } from './rpc.ts'
 interface PageSummary { slug: string; title: string; area: string; type: string; summary: string; created: string }
 interface PageList { total: number; items: PageSummary[]; areas: string[]; types: string[] }
 interface PageDetail extends PageSummary { body: string; bodyTruncated: boolean }
@@ -98,7 +96,7 @@ export function WikiBrowser({ rpc, onOpenSettings }: WikiBrowserProps): ReactNod
     setError('')
     const endpoint = tab === 'raw' ? 'raw-list' : tab === 'drafts' ? 'draft-list' : 'wiki-list'
     const payload = tab === 'raw' ? { query, status: rawStatus } : { query, area, type }
-    void rpc.call('/oks', endpoint, payload, controller.signal)
+    void callOksRpc(rpc, '/oks', endpoint, payload, controller.signal)
       .then(result => {
         if (controller.signal.aborted) return
         if (tab === 'raw') {
@@ -120,8 +118,8 @@ export function WikiBrowser({ rpc, onOpenSettings }: WikiBrowserProps): ReactNod
   useEffect(() => {
     const controller = new AbortController()
     void Promise.all([
-      rpc.call('/oks', 'overview', {}, controller.signal),
-      rpc.call('/oks', 'diagnostics', {}, controller.signal),
+      callOksRpc(rpc, '/oks', 'overview', {}, controller.signal),
+      callOksRpc(rpc, '/oks', 'diagnostics', {}, controller.signal),
     ]).then(([overviewResult, diagnosticsResult]) => {
       if (controller.signal.aborted) return
       const nextOverview = overviewResult.ok ? asOverview(overviewResult.value) : undefined
@@ -146,7 +144,7 @@ export function WikiBrowser({ rpc, onOpenSettings }: WikiBrowserProps): ReactNod
     setLoading(true); setError('')
     try {
       const endpoint = tab === 'wiki' ? 'wiki-get' : tab === 'drafts' ? 'draft-get' : 'raw-get'
-      const result = await rpc.call('/oks', endpoint, tab === 'raw' ? { id } : { slug: id })
+      const result = await callOksRpc(rpc, '/oks', endpoint, tab === 'raw' ? { id } : { slug: id })
       const detail = result.ok ? asDetail(result.value) : undefined
       if (!detail) setError(result.error?.message || `无法打开此${tabLabel(tab)}条目。`)
       else setSelected(detail)
