@@ -32,7 +32,8 @@ export default defineConfig({
   target: 'es2024',
   fixedExtension: false,
   dts: false,
-  clean: true,
+  // Keep the separately-built host entrypoint when the client watcher rebuilds.
+  clean: false,
   sourcemap: true,
   external: EXTERNALS,
   // Inline everything that isn't a platform module.

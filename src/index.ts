@@ -298,9 +298,81 @@ function deriveQuery(exec: ToolExecution): string {
   return `${exec.name} ${args}`.slice(0, 200)
 }
 
+interface OksRecallTrace {
+  id: string
+  at: string
+  phase: string
+  status: 'ok' | 'info' | 'empty' | 'error'
+  candidateCount: number
+  matches: string[]
+  topRelevance?: number
+  threshold?: number
+}
+
+/** Extract UI-safe recall facts without exposing prompts, snippets, or paths. */
+function parseRecallStats(stdout: string): { candidateCount: number; matches: string[]; topRelevance?: number } {
+  try {
+    const data = JSON.parse(stdout) as { knowledge?: RecallHit[]; episodic?: EpisodicHit[] }
+    const knowledge = data.knowledge ?? []
+    const episodic = data.episodic ?? []
+    const items = [...knowledge, ...episodic]
+    const matches = [
+      ...knowledge.map(item => safeTraceLabel(item.slug)).filter(value => value !== '[知识条目]'),
+      ...episodic.map(() => 'episodic'),
+    ].slice(0, 12)
+    const relevance = items.map(item => item.relevance).find(value => typeof value === 'number' && Number.isFinite(value))
+    return { candidateCount: items.length, matches, topRelevance: relevance }
+  } catch {
+    return { candidateCount: 0, matches: [] }
+  }
+}
+
+interface OksActivityEvent {
+  id: string
+  at: string
+  kind: string
+  label: string
+  detail: string
+  status: 'ok' | 'info' | 'error'
+  traceId?: string
+}
+
+/** Trace labels are identifiers only; never surface arbitrary OKS title text. */
+function safeTraceLabel(value: unknown): string {
+  const label = String(value ?? '').trim()
+  return /^[-_\.\p{L}\p{N}]{1,120}$/u.test(label) ? label : '[知识条目]'
+}
+
+/** Keep only short, sanitized, process-local activity facts for the browser. */
+function pushActivity(events: OksActivityEvent[], kind: string, label: string, detail: string, status: OksActivityEvent['status'] = 'info', traceId?: string): void {
+  events.unshift({
+    id: randomUUID(), at: new Date().toISOString(), kind, label,
+    detail: detail.replace(/[\r\n]+/g, ' ').replace(/[A-Za-z]:\\[^ ]+|\/(?:Users|home|tmp)\/[^ ]+/g, '[本地路径已隐藏]').replace(/(?:api[_-]?key|token|secret|password)\s*[:=]\s*[^ ]+/ig, '[敏感值已隐藏]').slice(0, 180), status, traceId,
+  })
+  if (events.length > 50) events.length = 50
+}
+
 export function apply(ctx: Context, config: OksConfig = {}) {
+  const activity: OksActivityEvent[] = []
+  const traces: OksRecallTrace[] = []
+  const recordActivity = (kind: string, label: string, detail: string, status: OksActivityEvent['status'] = 'info', traceId?: string) => pushActivity(activity, kind, label, detail, status, traceId)
+  const recordTrace = (phase: string, stdout: string, threshold?: number, status: OksRecallTrace['status'] = 'ok'): string => {
+    const traceId = randomUUID().slice(0, 12)
+    const stats = parseRecallStats(stdout)
+    traces.unshift({ id: traceId, at: new Date().toISOString(), phase, status, candidateCount: stats.candidateCount, matches: stats.matches, topRelevance: stats.topRelevance, threshold })
+    if (traces.length > 50) traces.length = 50
+    return traceId
+  }
+  const updateTrace = (traceId: string, status: OksRecallTrace['status']): OksRecallTrace | undefined => {
+    const trace = traces.find(item => item.id === traceId)
+    if (trace) trace.status = status
+    return trace
+  }
   // Settings namespace (Host half) pairs with the browser RecallParamsCard.
-  const settingsHooks = createDynamicSettingsHooks(config, syncOksConfig)
+  const settingsHooks = createDynamicSettingsHooks(config, async (cfg, changed) => {
+    await syncOksConfig(cfg, changed)
+    recordActivity('settings', '设置更新', `${changed.size} 项设置已同步`, 'ok')
+  })
   installSettingsSection(ctx, OKS_NS, OksConfigSchema, config, settingsHooks)
 
   // Read-only Web lifecycle browser API; the client receives sanitized data only.
@@ -311,6 +383,21 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     const body = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
     const activeConfig = settingsHooks.getCurrent()
     const configuredPath = activeConfig.knowledge_base_path || await readOksKnowledgeBasePath()
+    if (endpoint === 'activity') {
+      const requested = typeof body.limit === 'number' && Number.isFinite(body.limit) ? Math.floor(body.limit) : 12
+      const limit = Math.max(1, Math.min(20, requested))
+      return { ok: true, value: { items: activity.slice(0, limit), truncated: activity.length > limit } }
+    }
+    if (endpoint === 'recall-trace') {
+      const requested = typeof body.limit === 'number' && Number.isFinite(body.limit) ? Math.floor(body.limit) : 12
+      const limit = Math.max(1, Math.min(20, requested))
+      return { ok: true, value: { items: traces.slice(0, limit), truncated: traces.length > limit } }
+    }
+    const endpointLabels: Record<string, string> = {
+      diagnostics: '读取连接诊断', overview: '读取知识库概览', 'wiki-list': '浏览 Wiki 知识', 'wiki-get': '打开 Wiki 详情',
+      'draft-list': '浏览审核草稿', 'draft-get': '打开草稿详情', 'raw-list': '浏览 Raw 资料', 'raw-get': '打开 Raw 详情',
+    }
+    if (endpointLabels[endpoint]) recordActivity('browser', endpointLabels[endpoint], '来自 OKS 工作区的只读请求')
     if (endpoint === 'diagnostics') {
       let oksCliAvailable = true
       try {
@@ -431,7 +518,17 @@ export function apply(ctx: Context, config: OksConfig = {}) {
       const limit = args.limit ?? 3
       const all = [args.query, ...(args.queries ?? [])].filter(Boolean)
       if (all.length <= 1) {
-        return runOks(['recall', args.query, '--format', 'json', '--limit', String(limit)])
+        try {
+          const out = await runOks(['recall', args.query, '--format', 'json', '--limit', String(limit)])
+          const traceId = recordTrace('tool', out, limit)
+          const trace = updateTrace(traceId, 'ok')
+          recordActivity('tool', 'oks_recall', `返回 ${trace?.candidateCount ?? 0} 个候选`, 'ok', traceId)
+          return out
+        } catch (error) {
+          const traceId = recordTrace('tool', '', limit, 'error')
+          recordActivity('tool', 'oks_recall 失败', 'OKS CLI 未返回可用结果', 'error', traceId)
+          throw error
+        }
       }
       // Fan out: parallel recall per query, merge + dedupe by slug.
       const outs = await Promise.all(all.map(q =>
@@ -450,7 +547,11 @@ export function apply(ctx: Context, config: OksConfig = {}) {
           if (p && !seen.has(p)) { seen.add(p); episodic.push(h) }
         }
       }
-      return JSON.stringify({ schema_version: 'recall-response/v1-multi', query: args.query, knowledge, episodic })
+      const out = JSON.stringify({ schema_version: 'recall-response/v1-multi', query: args.query, knowledge, episodic })
+      const traceId = recordTrace('tool', out, limit)
+      const trace = updateTrace(traceId, 'ok')
+      recordActivity('tool', 'oks_recall 多查询', `合并 ${trace?.candidateCount ?? 0} 个候选`, 'ok', traceId)
+      return out
     },
   }))
 
@@ -464,7 +565,14 @@ export function apply(ctx: Context, config: OksConfig = {}) {
       render: (_args, value) => [{ type: 'text', text: value }],
     },
     async execute() {
-      return runOks(['status'])
+      try {
+        const out = await runOks(['status'])
+        recordActivity('tool', 'oks_status', '读取知识库状态', 'ok')
+        return out
+      } catch (error) {
+        recordActivity('tool', 'oks_status 失败', 'OKS CLI 未返回状态', 'error')
+        throw error
+      }
     },
   }))
 
@@ -482,7 +590,14 @@ export function apply(ctx: Context, config: OksConfig = {}) {
       render: (_args, value) => [{ type: 'text', text: value }],
     },
     async execute(args) {
-      return runOks(['wiki', 'use', args.slug])
+      try {
+        const out = await runOks(['wiki', 'use', args.slug])
+        recordActivity('tool', 'oks_wiki_use', '记录 Wiki 使用信号', 'ok')
+        return out
+      } catch (error) {
+        recordActivity('tool', 'oks_wiki_use 失败', 'Wiki 使用信号记录失败', 'error')
+        throw error
+      }
     },
   }))
 
@@ -578,9 +693,12 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     if (activeConfig.prestep_knowledge_only ?? true) args.push('--knowledge-only')
     let out = ''
     try { out = await runOks(args) }
-    catch { return next() }
+    catch { const traceId = recordTrace('pre-step', '', activeConfig.prestep_floor ?? 0.85, 'error'); recordActivity('prestep', 'Pre-step 召回失败', 'OKS CLI 未返回可用结果', 'error', traceId); return next() }
+    const traceId = recordTrace('pre-step', out, activeConfig.prestep_floor ?? 0.85)
     const recalled = parseRecall(out)
-    if (!recalled) return next()
+    if (!recalled) { const trace = updateTrace(traceId, 'empty'); recordActivity('prestep', 'Pre-step 召回', `未命中可注入的知识（${trace?.candidateCount ?? 0} 个候选）`, 'info', traceId); return next() }
+    const trace = updateTrace(traceId, 'ok')
+    recordActivity('prestep', 'Pre-step 召回', `已生成脱敏上下文注入（${trace?.candidateCount ?? 0} 个候选）`, 'ok', traceId)
     const downstream = await next()
     if (downstream.kind !== 'enter') return downstream
     return { kind: 'enter', messages: [...downstream.messages, contextMessage(recalled.text)] }
@@ -597,12 +715,14 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     const topn = activeConfig.posttool_topn ?? 2
     let out = ''
     try { out = await runOks(['recall', query, '--format', 'json', '--limit', String(topn), '--floor', String(floor)]) }
-    catch { return next() }
+    catch { const traceId = recordTrace('post-tool', '', floor, 'error'); recordActivity('posttool', 'Post-tool 召回失败', `工具 ${exec.name} 未返回可用结果`, 'error', traceId); return next() }
+    const traceId = recordTrace('post-tool', out, floor)
     const mode = activeConfig.posttool_mode === 'full' ? 'full' : 'signal'
     const signal = mode === 'full'
       ? parseRecall(out)
       : parseSignal(out, query, floor, activeConfig.posttool_signal_rel_floor ?? 2.5)
-    if (!signal) return next()
+    if (!signal) { updateTrace(traceId, 'empty'); recordActivity('posttool', 'Post-tool 信号', `工具 ${exec.name} 未命中相关知识`, 'info', traceId); return next() }
+    recordActivity('posttool', 'Post-tool 信号', `工具 ${exec.name} 生成脱敏记忆提示`, 'ok', traceId)
     const downstream = await next()
     return { ...downstream, additionalContexts: [contextMessage(signal.text), ...(downstream.additionalContexts ?? [])] }
   })
