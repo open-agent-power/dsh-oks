@@ -1,7 +1,7 @@
 ﻿import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import test from 'node:test'
 import { getDraftPage, getWikiPage, listDraftPages, listWikiPages } from '../src/wiki-browser.ts'
 
@@ -12,7 +12,10 @@ async function createFixture() {
   await writeFile(join(root, 'wiki', 'welcome.md'), ['---', 'title: Team welcome', 'type: concept', 'area: teamwork', 'created: 2026-08-18', '---', '', 'Welcome to the knowledge base.'].join('\n'), 'utf8')
   return root
 }
-async function cleanup(root) { await rm(root, { recursive: true, force: true }) }
+async function cleanup(root) {
+  const rel = relative(resolve(tmpdir()), root)
+  if (rel && !rel.startsWith('..') && !isAbsolute(rel)) await rm(root, { recursive: true, force: true })
+}
 
 test('lists Wiki pages with metadata, full-text search, and filters', async () => {
   const root = await createFixture()

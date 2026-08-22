@@ -26,9 +26,15 @@ oks config set knowledge_base_path <knowledge-base-path>
 
 ### 安装插件
 
+生产部署请固定 tag 或 commit，避免重新安装时获取到不同代码：
+
 ```bash
-dsh plugin --profile web add github:open-agent-power/dsh-oks
+dsh plugin --profile web add github:open-agent-power/dsh-oks#<commit-or-tag>
 ```
+
+开发分支才使用不带 pin 的地址。发布包已经包含 host 与 browser 构建产物；
+如果从源码 checkout 安装或升级，先执行 `pnpm run build`。安装或升级后重启
+DSH Web，让它重新扫描插件的 browser bundle。
 
 启动 DSH Web 后，打开 **系统设置 → OKS**。面板会检查：
 

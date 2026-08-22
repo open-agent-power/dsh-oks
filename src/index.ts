@@ -503,8 +503,8 @@ export function apply(ctx: Context, config: OksConfig = {}) {
       const rate = s.total > 0 ? Math.round((s.useful / s.total) * 100) : 0
       const injectBlock = `\n--- OKS injection feedback ---\nTotal: ${s.total} | useful ${s.useful} (${s.total ? Math.round(s.useful / s.total * 100) : 0}%) | noise ${s.noise} | irrelevant ${s.irrelevant} | useful rate ${rate}%`
       const topSlugs = Object.entries(s.bySlug).sort((a, b) => (b[1].useful + b[1].noise) - (a[1].useful + a[1].noise)).slice(0, 5)
-      const slugLines = topSlugs.length ? topSlugs.map(([slug, c]) => `  ${slug}: useful ${c.useful} / noise ${c.noise}`).join('\n') : '  No per-slug feedback yet.'
-      return base + injectBlock + '\nTop slugs:\n' + slugLines
+       const slugLines = topSlugs.length ? topSlugs.map(([slug, c]) => `  ${slug}: useful ${c.useful} / noise ${c.noise}`).join('\n') : '  No per-slug feedback yet.'
+       return base + injectBlock + '\nTop slugs:\n' + slugLines
     },
   }))
 
@@ -522,7 +522,7 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     },
     async execute() {
       const s = readInjectStats()
-      if (s.total === 0) return 'No OKS injection feedback recorded yet.'
+       if (s.total === 0) return 'No OKS injection feedback recorded yet.'
       return JSON.stringify(s, null, 2)
     },
   }))
