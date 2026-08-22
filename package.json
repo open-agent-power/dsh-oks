@@ -4,9 +4,11 @@
   "description": "DeepSeek Harness plugin -- visualize and query the OKS knowledge base in the dsh Web UI",
   "type": "module",
   "license": "MIT",
-  "main": "src/index.ts",
+  "main": "lib/index.mjs",
   "exports": {
-    ".": "./src/index.ts",
+    ".": {
+      "default": "./lib/index.mjs"
+    },
     "./client": {
       "default": "./lib/client.js"
     },
@@ -24,7 +26,8 @@
     }
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && tsdown --config tsdown.host.config.ts",
+    "prepack": "tsdown && tsdown --config tsdown.host.config.ts",
     "watch": "tsdown --watch",
     "test": "node --test test/*.test.mjs"
   },
@@ -32,6 +35,7 @@
     "src/**/*.ts",
     "src/**/*.tsx",
     "lib/client.js",
+    "lib/index.mjs",
     "cordis.patch.yml",
     "skills/SKILL.md",
     "README.md"

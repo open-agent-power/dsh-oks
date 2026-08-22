@@ -1,7 +1,7 @@
-﻿import assert from 'node:assert/strict'
+import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import test from 'node:test'
 import { clearOksKnowledgeBasePath, createDynamicSettingsHooks, parseOksKnowledgeBasePath, writeRecallYaml } from '../src/oks-config.ts'
 
@@ -96,7 +96,8 @@ test('patches only changed recall.yaml keys and preserves owner content', async 
     assert.match(out, /search_backend: native # owner choice/)
     assert.deepEqual((await readdir(join(root, 'settings'))).sort(), ['recall.yaml'])
   } finally {
-    await rm(root, { recursive: true, force: true })
+    const rel = relative(resolve(tmpdir()), root)
+    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) await rm(root, { recursive: true, force: true })
   }
 })
 
@@ -113,7 +114,8 @@ test('creates a complete default recall.yaml including inject configuration', as
     assert.match(out, /conflict:/)
     assert.match(out, /search_backend: native/)
   } finally {
-    await rm(root, { recursive: true, force: true })
+    const rel = relative(resolve(tmpdir()), root)
+    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) await rm(root, { recursive: true, force: true })
   }
 })
 
@@ -127,7 +129,8 @@ test('patches the user-facing prestep enabled switch without disturbing other se
     assert.match(out, /recall:\n  floor: 0\.7/)
     assert.match(out, /posttool:/)
   } finally {
-    await rm(root, { recursive: true, force: true })
+    const rel = relative(resolve(tmpdir()), root)
+    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) await rm(root, { recursive: true, force: true })
   }
 })
 
