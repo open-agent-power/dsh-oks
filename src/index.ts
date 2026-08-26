@@ -270,6 +270,24 @@ function parseRecallJson(stdout: string): { knowledge: unknown[]; episodic: unkn
   } catch { return { knowledge: [], episodic: [] } }
 }
 
+/** Parse `oks lint` CLI output into a structured health-check result.
+ * The CLI may emit rich/ANSI escape codes; strip them before matching. */
+interface LintResult { errors: number; warnings: number; items: string[]; summary: string; passed: boolean }
+function parseLintOutput(stdout: string): LintResult {
+  const clean = stdout.replace(/\x1b\[[0-9;]*m/g, '').replace(/\r\n/g, '\n')
+  const errors: string[] = []
+  const warnings: string[] = []
+  for (const line of clean.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith('✗') || trimmed.startsWith('*')) errors.push(trimmed.replace(/^[✗*]\s*/, ''))
+    else if (trimmed.startsWith('!') && !trimmed.startsWith('![')) warnings.push(trimmed.replace(/^!\s*/, ''))
+  }
+  const summaryMatch = /Wiki:\s*(\d+)\s*pages.*?dropped:\s*(\d+).*?orphan:\s*(\d+).*?Active coverage:\s*(\d+)/.exec(clean)
+  const summary = summaryMatch ? summaryMatch[0] : clean.split('\n').filter(l => l.includes('Wiki:')).pop()?.trim() ?? ''
+  const passed = errors.length === 0 && warnings.length === 0
+  return { errors: errors.length, warnings: warnings.length, items: [...errors, ...warnings], summary, passed }
+}
+
 /** Read ~/.oks/inject_feedback.log and tally ratings. Best-effort; never throws. */
 function readInjectStats(): { total: number; useful: number; noise: number; irrelevant: number; bySlug: Record<string, { useful: number; noise: number; irrelevant: number }> } {
   const empty = { total: 0, useful: 0, noise: 0, irrelevant: 0, bySlug: {} as Record<string, { useful: number; noise: number; irrelevant: number }> }
@@ -400,6 +418,7 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     const endpointLabels: Record<string, string> = {
       diagnostics: '读取连接诊断', overview: '读取知识库概览', 'wiki-list': '浏览 Wiki 知识', 'wiki-get': '打开 Wiki 详情',
       'draft-list': '浏览审核草稿', 'draft-get': '打开草稿详情', 'raw-list': '浏览 Raw 资料', 'raw-get': '打开 Raw 详情',
+      'lint': '运行健康检查',
     }
     if (endpointLabels[endpoint]) recordActivity('browser', endpointLabels[endpoint], '来自 OKS 工作区的只读请求')
     if (endpoint === 'diagnostics') {
@@ -439,6 +458,16 @@ export function apply(ctx: Context, config: OksConfig = {}) {
       if (endpoint === 'overview') {
         const value = await getOksOverview(configuredPath)
         return { ok: true, value }
+      }
+      if (endpoint === 'lint') {
+        try {
+          const stdout = await runOks(['lint'])
+          const result = parseLintOutput(stdout)
+          recordActivity('browser', '健康检查', `${result.errors} 错误, ${result.warnings} 警告`, result.errors > 0 ? 'error' : result.warnings > 0 ? 'info' : 'ok')
+          return { ok: true, value: result }
+        } catch {
+          return { ok: true, value: { errors: -1, warnings: 0, items: ['OKS CLI 未返回健康检查结果'], summary: '', passed: false } }
+        }
       }
       if (endpoint === 'raw-list') {
         const value = await listRawBundles(configuredPath, {
@@ -624,6 +653,31 @@ export function apply(ctx: Context, config: OksConfig = {}) {
       const topSlugs = Object.entries(s.bySlug).sort((a, b) => (b[1].useful + b[1].noise) - (a[1].useful + a[1].noise)).slice(0, 5)
       const slugLines = topSlugs.length ? topSlugs.map(([slug, c]) => `  ${slug}: useful ${c.useful} / noise ${c.noise}`).join('\n') : '  No per-slug feedback yet.'
       return base + injectBlock + '\nTop slugs:\n' + slugLines
+    },
+  }))
+
+  // Tool: oks_lint -- run knowledge base health check.
+  ctx.tools.register(defineTool({
+    name: 'oks_lint',
+    description:
+      'Run a health check on the OKS knowledge base: validate frontmatter, ' +
+      'detect orphan pages, check backlinks, and report coverage. Use this ' +
+      'to diagnose knowledge base issues or verify integrity after bulk edits.',
+    parameters: {},
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: value }],
+    },
+    async execute() {
+      try {
+        const out = await runOks(['lint'])
+        const result = parseLintOutput(out)
+        recordActivity('tool', 'oks_lint', `健康检查: ${result.errors} 错误, ${result.warnings} 警告`, result.errors > 0 ? 'error' : result.warnings > 0 ? 'info' : 'ok')
+        return out
+      } catch (error) {
+        recordActivity('tool', 'oks_lint 失败', 'OKS CLI 未返回健康检查结果', 'error')
+        throw error
+      }
     },
   }))
 
