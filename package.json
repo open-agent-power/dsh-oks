@@ -32,7 +32,7 @@
     "build": "tsdown && tsdown --config tsdown.host.config.ts",
     "prepack": "tsdown && tsdown --config tsdown.host.config.ts",
     "watch": "tsdown --watch",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --experimental-strip-types --test test/*.test.mjs",
     "verify:pack": "node scripts/verify-pack.mjs"
   },
   "files": [

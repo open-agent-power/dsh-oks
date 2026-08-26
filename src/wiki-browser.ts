@@ -7,6 +7,7 @@
  */
 import { open, readdir } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
+import { listVfsFiles, type OksFsRun } from './oks-fs.ts'
 
 export interface WikiListFilters { query?: string; area?: string; type?: string }
 export interface WikiSummary { slug: string; title: string; area: string; type: string; summary: string; created: string }
@@ -52,7 +53,19 @@ function displaySummary(markdown: string): string {
 }
 function titleFromBody(body: string): string { return /^#\s+(.+)$/m.exec(body)?.[1]?.trim() ?? '' }
 function slugFromPath(root: string, file: string): string { return relative(root, file).split(sep).join('/').replace(/\.md$/i, '') }
-async function markdownFiles(root: string): Promise<{ files: string[]; truncated: boolean }> {
+/**
+ * Enumerate markdown pages under one lifecycle directory. When an OKS VFS
+ * runner is supplied, use `oks fs tree` (hardened traversal/symlink) and map
+ * its VFS paths back onto the local root; otherwise keep the readdir fallback.
+ */
+async function markdownFiles(root: string, run?: OksFsRun, rootUri?: string): Promise<{ files: string[]; truncated: boolean }> {
+  if (run && rootUri) {
+    const vfs = await listVfsFiles(run, rootUri)
+    if (vfs) {
+      const rels = vfs.files.filter(rel => rel.toLowerCase().endsWith('.md') && rel !== '.gitkeep')
+      return { files: rels.map(rel => join(root, rel)), truncated: vfs.truncated }
+    }
+  }
   const files: string[] = []
   const pending = [root]
   let scannedDirectories = 0
@@ -121,9 +134,9 @@ function comparePages(a: WikiSummary, b: WikiSummary): number { return b.created
 function normalizeFilter(value: unknown): string { return text(value).slice(0, MAX_QUERY_CHARS) }
 
 /** List markdown pages under one lifecycle directory. */
-export async function listMarkdownPages(knowledgeBasePath: string, directory: 'wiki' | 'drafts', filters: WikiListFilters = {}): Promise<WikiListResult> {
+export async function listMarkdownPages(knowledgeBasePath: string, directory: 'wiki' | 'drafts', filters: WikiListFilters = {}, run?: OksFsRun): Promise<WikiListResult> {
   const root = resolve(knowledgeBasePath, directory)
-  const scan = await markdownFiles(root)
+  const scan = await markdownFiles(root, run, `oks://${directory}/`)
   const pages: SearchItem[] = []
   let totalReadBytes = 0
   let truncated = scan.truncated
@@ -151,11 +164,11 @@ export async function listMarkdownPages(knowledgeBasePath: string, directory: 'w
   }
 }
 
-export async function getMarkdownPage(knowledgeBasePath: string, directory: 'wiki' | 'drafts', requestedSlug: unknown): Promise<WikiDetail | undefined> {
+export async function getMarkdownPage(knowledgeBasePath: string, directory: 'wiki' | 'drafts', requestedSlug: unknown, run?: OksFsRun): Promise<WikiDetail | undefined> {
   const slug = normalizeFilter(requestedSlug)
   if (!slug) return undefined
   const root = resolve(knowledgeBasePath, directory)
-  const file = (await markdownFiles(root)).files.find(candidate => slugFromPath(root, candidate) === slug)
+  const file = (await markdownFiles(root, run, `oks://${directory}/`)).files.find(candidate => slugFromPath(root, candidate) === slug)
   if (!file) return undefined
   const bounded = await readBoundedUtf8(file, MAX_MARKDOWN_FILE_BYTES)
   const { page } = summaryFromSource(root, file, bounded.text)
@@ -164,15 +177,15 @@ export async function getMarkdownPage(knowledgeBasePath: string, directory: 'wik
 }
 
 /** Read-only Wiki aliases retained for the existing RPC contract. */
-export function listWikiPages(knowledgeBasePath: string, filters: WikiListFilters = {}): Promise<WikiListResult> {
-  return listMarkdownPages(knowledgeBasePath, 'wiki', filters)
+export function listWikiPages(knowledgeBasePath: string, filters: WikiListFilters = {}, run?: OksFsRun): Promise<WikiListResult> {
+  return listMarkdownPages(knowledgeBasePath, 'wiki', filters, run)
 }
-export function getWikiPage(knowledgeBasePath: string, requestedSlug: unknown): Promise<WikiDetail | undefined> {
-  return getMarkdownPage(knowledgeBasePath, 'wiki', requestedSlug)
+export function getWikiPage(knowledgeBasePath: string, requestedSlug: unknown, run?: OksFsRun): Promise<WikiDetail | undefined> {
+  return getMarkdownPage(knowledgeBasePath, 'wiki', requestedSlug, run)
 }
-export function listDraftPages(knowledgeBasePath: string, filters: WikiListFilters = {}): Promise<WikiListResult> {
-  return listMarkdownPages(knowledgeBasePath, 'drafts', filters)
+export function listDraftPages(knowledgeBasePath: string, filters: WikiListFilters = {}, run?: OksFsRun): Promise<WikiListResult> {
+  return listMarkdownPages(knowledgeBasePath, 'drafts', filters, run)
 }
-export function getDraftPage(knowledgeBasePath: string, requestedSlug: unknown): Promise<WikiDetail | undefined> {
-  return getMarkdownPage(knowledgeBasePath, 'drafts', requestedSlug)
+export function getDraftPage(knowledgeBasePath: string, requestedSlug: unknown, run?: OksFsRun): Promise<WikiDetail | undefined> {
+  return getMarkdownPage(knowledgeBasePath, 'drafts', requestedSlug, run)
 }

@@ -34,6 +34,7 @@ const FALLBACK = {
   prestep_floor: 0.85, prestep_knowledge_only: true,
   posttool_mode: 'signal', posttool_floor: 0.9, posttool_topn: 2, posttool_signal_rel_floor: 2.5,
   search_backend: 'native',
+  vfs_enabled: false,
 }
 
 // ── dsh design tokens (mirror PluginCard.module.css / fields.module.css) ──
@@ -223,6 +224,18 @@ export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
                 <option value="fts5">fts5（SQLite FTS5 全文检索 + BM25）</option>
                 <option value="fusion">fusion（native + fts5 组合补充）</option>
               </select>
+            </Field>
+          </div>
+
+          {/* 🗂 文件浏览后端 */}
+          <div style={group}>
+            <div style={groupTitle}>🗂 文件浏览后端</div>
+            <Field id={gid('vfs')} lab="VFS 虚拟文件系统" h="Wiki / Raw 页面的文件枚举默认走原生 fs；开启后改用 oks fs 命令（内置路径穿越与软链逃逸防护），需已安装 OKS 0.6.5+，否则自动回退原生 fs。">
+              <button id={gid('vfs')} type="button" role="switch" aria-checked={Boolean(v.vfs_enabled ?? false)}
+                onClick={() => up('vfs_enabled', !Boolean(v.vfs_enabled ?? false))}
+                style={{ alignSelf: 'flex-start', minWidth: 68, border: 0, borderRadius: 999, padding: '7px 11px', background: Boolean(v.vfs_enabled ?? false) ? T.brand : T.border, color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                {Boolean(v.vfs_enabled ?? false) ? '已开启' : '已关闭'}
+              </button>
             </Field>
           </div>
 

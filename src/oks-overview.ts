@@ -2,6 +2,7 @@
 import { readdir, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { listRawBundles } from './raw-browser.ts'
+import { listVfsFiles, type OksFsRun } from './oks-fs.ts'
 
 export interface OksOverview {
   connected: true
@@ -39,7 +40,19 @@ export interface OksDiagnostics {
 const MAX_SCAN_DIRECTORIES = 2_000
 const MAX_SCANNED_FILES = 1_000
 
-async function countFiles(root: string, include: (name: string) => boolean): Promise<{ count: number; truncated: boolean }> {
+async function countFiles(root: string, include: (name: string) => boolean, run?: OksFsRun, rootUri?: string): Promise<{ count: number; truncated: boolean }> {
+  if (run && rootUri) {
+    const vfs = await listVfsFiles(run, rootUri)
+    if (vfs) {
+      let count = 0
+      for (const rel of vfs.files) {
+        const name = rel.split('/').pop() ?? ''
+        if (name === '.gitkeep') continue
+        if (include(name)) count++
+      }
+      return { count, truncated: vfs.truncated }
+    }
+  }
   let count = 0
   let scannedDirectories = 0
   let scannedFiles = 0
@@ -84,12 +97,12 @@ async function isDirectory(path: string): Promise<boolean> {
 }
 
 /** Count the three lifecycle layers without exposing the local root path. */
-export async function getOksOverview(knowledgeBasePath: string): Promise<OksOverview> {
+export async function getOksOverview(knowledgeBasePath: string, run?: OksFsRun): Promise<OksOverview> {
   const [wiki, drafts, raw, rawBundles] = await Promise.all([
-    countFiles(join(knowledgeBasePath, 'wiki'), name => name.toLowerCase().endsWith('.md')),
-    countFiles(join(knowledgeBasePath, 'drafts'), name => name.toLowerCase().endsWith('.md')),
-    countFiles(join(knowledgeBasePath, 'raw'), () => true),
-    listRawBundles(knowledgeBasePath),
+    countFiles(join(knowledgeBasePath, 'wiki'), name => name.toLowerCase().endsWith('.md'), run, 'oks://wiki/'),
+    countFiles(join(knowledgeBasePath, 'drafts'), name => name.toLowerCase().endsWith('.md'), run, 'oks://drafts/'),
+    countFiles(join(knowledgeBasePath, 'raw'), () => true, run, 'oks://raw/'),
+    listRawBundles(knowledgeBasePath, {}, run),
   ])
   const truncated = wiki.truncated || drafts.truncated || raw.truncated || rawBundles.truncated
   return {
@@ -107,7 +120,7 @@ export async function getOksOverview(knowledgeBasePath: string): Promise<OksOver
  * The CLI availability is supplied by the Host because only the Host can run
  * the `oks` executable; this function remains deterministic and easy to test.
  */
-export async function getOksDiagnostics(knowledgeBasePath: string, oksCliAvailable: boolean): Promise<OksDiagnostics> {
+export async function getOksDiagnostics(knowledgeBasePath: string, oksCliAvailable: boolean, run?: OksFsRun): Promise<OksDiagnostics> {
   const empty = {
     wikiCount: 0,
     draftCount: 0,
@@ -155,7 +168,7 @@ export async function getOksDiagnostics(knowledgeBasePath: string, oksCliAvailab
     isDirectory(join(root, 'drafts')),
     isDirectory(join(root, 'raw')),
   ])
-  const overview = await getOksOverview(root)
+  const overview = await getOksOverview(root, run)
   const complete = wikiDirectory && draftsDirectory && rawDirectory
   return {
     ...overview,

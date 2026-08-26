@@ -1,6 +1,7 @@
 ﻿/** Read-only browser for OKS Raw Bundle v0.2 evidence. */
 import { open, readdir } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
+import { listVfsFiles, type OksFsRun } from './oks-fs.ts'
 
 export interface RawListFilters { query?: string; status?: string }
 export interface RawBundleSummary {
@@ -124,7 +125,26 @@ async function filesUnder(directory: string): Promise<ScanResult> {
   return { files: out.sort((a, b) => a.localeCompare(b)), truncated }
 }
 
-async function findBundleDirectories(rawRoot: string): Promise<BundleDirectories> {
+async function findBundleDirectories(rawRoot: string, run?: OksFsRun): Promise<BundleDirectories> {
+  if (run) {
+    const vfs = await listVfsFiles(run, 'oks://raw/')
+    if (vfs) {
+      const seen = new Set<string>()
+      const directories: string[] = []
+      for (const rel of vfs.files) {
+        const name = rel.split('/').at(-1)
+        if (!name || name.toLowerCase() !== 'bundle.json') continue
+        const slash = rel.lastIndexOf('/')
+        const parentRel = slash < 0 ? '' : rel.slice(0, slash)
+        const directory = parentRel ? join(rawRoot, parentRel) : resolve(rawRoot)
+        if (seen.has(directory)) continue
+        seen.add(directory)
+        directories.push(directory)
+      }
+      const truncated = vfs.truncated || seen.size > MAX_BUNDLE_DIRECTORIES
+      return { directories: directories.sort((a, b) => relativeId(rawRoot, a).localeCompare(relativeId(rawRoot, b))).slice(0, MAX_BUNDLE_DIRECTORIES), truncated }
+    }
+  }
   const directories: string[] = []
   const pending = [resolve(rawRoot)]
   let scannedDirectories = 0
@@ -195,9 +215,9 @@ async function readBundle(rawRoot: string, directory: string): Promise<ReadBundl
   }
 }
 
-export async function listRawBundles(knowledgeBasePath: string, filters: RawListFilters = {}): Promise<RawListResult> {
+export async function listRawBundles(knowledgeBasePath: string, filters: RawListFilters = {}, run?: OksFsRun): Promise<RawListResult> {
   const rawRoot = resolve(knowledgeBasePath, 'raw')
-  const found = await findBundleDirectories(rawRoot)
+  const found = await findBundleDirectories(rawRoot, run)
   const bundles: ReadBundleResult[] = []
   for (const directory of found.directories) {
     const bundle = await readBundle(rawRoot, directory)
@@ -212,11 +232,11 @@ export async function listRawBundles(knowledgeBasePath: string, filters: RawList
   return { total: bundles.length, items, statuses: [...new Set(bundles.map(item => item.summary.status))].sort((a, b) => a.localeCompare(b)), truncated: found.truncated }
 }
 
-export async function getRawBundle(knowledgeBasePath: string, requestedId: unknown): Promise<RawBundleDetail | undefined> {
+export async function getRawBundle(knowledgeBasePath: string, requestedId: unknown, run?: OksFsRun): Promise<RawBundleDetail | undefined> {
   const id = normalizeFilter(requestedId)
   if (!id || id.includes('\\') || id.split('/').some(part => !part || part === '.' || part === '..')) return undefined
   const rawRoot = resolve(knowledgeBasePath, 'raw')
-  const found = await findBundleDirectories(rawRoot)
+  const found = await findBundleDirectories(rawRoot, run)
   const directory = found.directories.find(candidate => relativeId(rawRoot, candidate) === id)
   if (!directory) return undefined
   const item = await readBundle(rawRoot, directory)

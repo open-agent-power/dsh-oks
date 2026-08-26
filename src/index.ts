@@ -19,6 +19,7 @@ import { getRawBundle, listRawBundles } from './raw-browser.ts'
 import { getOksDiagnostics, getOksOverview } from './oks-overview.ts'
 import { isPrestepRecallEnabled } from './prestep-control.ts'
 import { resolveOksBin } from './oks-runtime.ts'
+import { makeOksFsRunner, probeOksFs, type OksFsRun } from './oks-fs.ts'
 import { clearOksKnowledgeBasePath, createDynamicSettingsHooks, parseOksKnowledgeBasePath, writeRecallYaml } from './oks-config.ts'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
@@ -52,6 +53,7 @@ export interface OksConfig {
   posttool_topn?: number
   posttool_signal_rel_floor?: number
   search_backend?: string
+  vfs_enabled?: boolean
 }
 
 /** Schema for the settings card. knowledge_base_path writes ~/.oks/config.json
@@ -72,6 +74,10 @@ export const OksConfigSchema: z<OksConfig> = z.object({
   posttool_topn: z.number().step(1).min(1).max(10).default(2),
   posttool_signal_rel_floor: z.number().min(0).max(10).step(0.1).default(2.5),
   search_backend: z.union(['native', 'fts5', 'fusion']).default('native'),
+  // When enabled, the browser card enumerates the knowledge base through the
+  // OKS 0.6.5 `oks fs` VFS backend. Defaults off: it has a hard 10-level depth
+  // limit per command, while the local-filesystem backend is unbounded.
+  vfs_enabled: z.boolean().default(false),
 })
 
 /** Resolve the OKS binary even when DSH was launched without the user's PATH. */
@@ -357,6 +363,21 @@ function pushActivity(events: OksActivityEvent[], kind: string, label: string, d
 }
 
 export function apply(ctx: Context, config: OksConfig = {}) {
+  // Lazy-probe OKS 0.6.5 `oks fs` once per host lifetime when the VFS backend
+  // is opted in; undefined means the browser enumeration falls back to the
+  // readdir implementation. Off by default so the unbounded local-filesystem
+  // backend stays the safe default.
+  let oksFsProbe: Promise<OksFsRun | undefined> | undefined
+  const browserRun = (): Promise<OksFsRun | undefined> => {
+    if (config.vfs_enabled !== true) return Promise.resolve(undefined)
+    if (oksFsProbe === undefined) {
+      oksFsProbe = (async () => {
+        const run = makeOksFsRunner(oksBin())
+        return (await probeOksFs(run)) ? run : undefined
+      })()
+    }
+    return oksFsProbe
+  }
   const activity: OksActivityEvent[] = []
   const traces: OksRecallTrace[] = []
   const recordActivity = (kind: string, label: string, detail: string, status: OksActivityEvent['status'] = 'info', traceId?: string) => pushActivity(activity, kind, label, detail, status, traceId)
@@ -410,7 +431,8 @@ export function apply(ctx: Context, config: OksConfig = {}) {
         oksCliAvailable = false
       }
       try {
-        return { ok: true, value: await getOksDiagnostics(configuredPath, oksCliAvailable) }
+        const run = await browserRun()
+        return { ok: true, value: await getOksDiagnostics(configuredPath, oksCliAvailable, run) }
       } catch (error) {
         warnSync('OKS diagnostics', error)
         return {
@@ -436,19 +458,20 @@ export function apply(ctx: Context, config: OksConfig = {}) {
       return { ok: false, error: { code: 'internal', message: 'OKS knowledge_base_path is not configured.', details: {} } }
     }
     try {
+      const run = await browserRun()
       if (endpoint === 'overview') {
-        const value = await getOksOverview(configuredPath)
+        const value = await getOksOverview(configuredPath, run)
         return { ok: true, value }
       }
       if (endpoint === 'raw-list') {
         const value = await listRawBundles(configuredPath, {
           query: typeof body.query === 'string' ? body.query : undefined,
           status: typeof body.status === 'string' ? body.status : undefined,
-        })
+        }, run)
         return { ok: true, value }
       }
       if (endpoint === 'raw-get') {
-        const value = await getRawBundle(configuredPath, body.id)
+        const value = await getRawBundle(configuredPath, body.id, run)
         if (!value) {
           return { ok: false, error: { code: 'internal', message: 'The requested Raw Bundle was not found.', details: {} } }
         }
@@ -459,11 +482,11 @@ export function apply(ctx: Context, config: OksConfig = {}) {
           query: typeof body.query === 'string' ? body.query : undefined,
           area: typeof body.area === 'string' ? body.area : undefined,
           type: typeof body.type === 'string' ? body.type : undefined,
-        })
+        }, run)
         return { ok: true, value }
       }
       if (endpoint === 'draft-get') {
-        const value = await getDraftPage(configuredPath, body.slug)
+        const value = await getDraftPage(configuredPath, body.slug, run)
         if (!value) {
           return { ok: false, error: { code: 'internal', message: 'The requested Draft was not found.', details: {} } }
         }
@@ -474,11 +497,11 @@ export function apply(ctx: Context, config: OksConfig = {}) {
           query: typeof body.query === 'string' ? body.query : undefined,
           area: typeof body.area === 'string' ? body.area : undefined,
           type: typeof body.type === 'string' ? body.type : undefined,
-        })
+        }, run)
         return { ok: true, value }
       }
       if (endpoint === 'wiki-get') {
-        const value = await getWikiPage(configuredPath, body.slug)
+        const value = await getWikiPage(configuredPath, body.slug, run)
         if (!value) {
           return { ok: false, error: { code: 'internal', message: 'The requested Wiki page was not found.', details: {} } }
         }
