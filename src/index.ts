@@ -288,6 +288,27 @@ function parseLintOutput(stdout: string): LintResult {
   return { errors: errors.length, warnings: warnings.length, items: [...errors, ...warnings], summary, passed }
 }
 
+/** Parse `oks status` CLI output to extract tier distribution and quality metrics.
+ * Strips ANSI codes and box-drawing characters before matching. */
+interface StatusTiers { hot: number; warm: number; cold: number; evictable: number; qualityAvg: number; pinned: number; types: Record<string, number> }
+function parseStatusTiers(stdout: string): StatusTiers | null {
+  const clean = stdout.replace(/\x1b\[[0-9;]*m/g, '').replace(/[│┌┐└┘─├┤┬┴┼]/g, ' ').replace(/\r\n/g, '\n')
+  const tierMatch = /hot\s*=\s*(\d+)\s+warm\s*=\s*(\d+)\s+cold\s*=\s*(\d+)\s+evictable\s*=\s*(\d+)/i.exec(clean)
+  const qualityMatch = /Quality avg:\s*([\d.]+)/.exec(clean)
+  const pinnedMatch = /Pinned:\s*(\d+)/i.exec(clean)
+  const typeMatches = [...clean.matchAll(/(concept|strategy|anti-pattern)\s*=\s*(\d+)/gi)]
+  if (!tierMatch) return null
+  const types: Record<string, number> = {}
+  for (const m of typeMatches) types[m[1].toLowerCase()] = Number(m[2])
+  return {
+    hot: Number(tierMatch[1]), warm: Number(tierMatch[2]),
+    cold: Number(tierMatch[3]), evictable: Number(tierMatch[4]),
+    qualityAvg: qualityMatch ? Number(qualityMatch[1]) : 0,
+    pinned: pinnedMatch ? Number(pinnedMatch[1]) : 0,
+    types,
+  }
+}
+
 /** Read ~/.oks/inject_feedback.log and tally ratings. Best-effort; never throws. */
 function readInjectStats(): { total: number; useful: number; noise: number; irrelevant: number; bySlug: Record<string, { useful: number; noise: number; irrelevant: number }> } {
   const empty = { total: 0, useful: 0, noise: 0, irrelevant: 0, bySlug: {} as Record<string, { useful: number; noise: number; irrelevant: number }> }
@@ -418,7 +439,7 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     const endpointLabels: Record<string, string> = {
       diagnostics: '读取连接诊断', overview: '读取知识库概览', 'wiki-list': '浏览 Wiki 知识', 'wiki-get': '打开 Wiki 详情',
       'draft-list': '浏览审核草稿', 'draft-get': '打开草稿详情', 'raw-list': '浏览 Raw 资料', 'raw-get': '打开 Raw 详情',
-      'lint': '运行健康检查',
+      'lint': '运行健康检查', 'status-tiers': '读取 tier 分布',
     }
     if (endpointLabels[endpoint]) recordActivity('browser', endpointLabels[endpoint], '来自 OKS 工作区的只读请求')
     if (endpoint === 'diagnostics') {
@@ -467,6 +488,16 @@ export function apply(ctx: Context, config: OksConfig = {}) {
           return { ok: true, value: result }
         } catch {
           return { ok: true, value: { errors: -1, warnings: 0, items: ['OKS CLI 未返回健康检查结果'], summary: '', passed: false } }
+        }
+      }
+      if (endpoint === 'status-tiers') {
+        try {
+          const stdout = await runOks(['status'])
+          const tiers = parseStatusTiers(stdout)
+          if (!tiers) return { ok: false, error: { code: 'internal', message: 'Unable to parse OKS status output.', details: {} } }
+          return { ok: true, value: tiers }
+        } catch {
+          return { ok: false, error: { code: 'internal', message: 'OKS CLI did not return status.', details: {} } }
         }
       }
       if (endpoint === 'raw-list') {

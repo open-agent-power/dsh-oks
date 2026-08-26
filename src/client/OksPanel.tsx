@@ -238,6 +238,55 @@ function HealthCheckCard({ rpc }: { rpc: OksConnectionRpc }): ReactNode {
   </section>
 }
 
+interface TierData { hot: number; warm: number; cold: number; evictable: number; qualityAvg: number; pinned: number; types: Record<string, number> }
+
+const tierMeta: Record<string, { label: string; tint: string }> = {
+  hot: { label: 'Hot', tint: '#dc5a3a' },
+  warm: { label: 'Warm', tint: T.warning },
+  cold: { label: 'Cold', tint: '#5b8def' },
+  evictable: { label: 'Evict', tint: T.border },
+}
+
+function TierDistributionCard({ rpc }: { rpc: OksConnectionRpc }): ReactNode {
+  const [tiers, setTiers] = useState<TierData | null>(null)
+  const [loading, setLoading] = useState(false)
+  useEffect(() => {
+    const controller = new AbortController()
+    setLoading(true)
+    void callOksRpc(rpc, '/oks', 'status-tiers', {}, controller.signal)
+      .then(r => { if (!controller.signal.aborted && r.ok) setTiers(r.value as TierData) })
+      .catch(() => undefined)
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
+  }, [rpc])
+  if (loading && !tiers) return <div style={{ padding: '12px', border: `1px solid ${T.border}`, borderRadius: 10, background: T.bgLayer3, marginBottom: 12, color: T.labelSecondary, fontSize: 12 }}>加载 tier 分布…</div>
+  if (!tiers) return null
+  const total = tiers.hot + tiers.warm + tiers.cold + tiers.evictable
+  const entries = Object.entries(tierMeta).map(([key, meta]) => ({ key, ...meta, count: tiers[key as keyof TierData] as number }))
+  return <section aria-label="Tier 分布" style={{ border: `1px solid ${T.border}`, borderRadius: 10, background: T.bgLayer3, overflow: 'hidden', marginBottom: 12 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '11px 12px', borderBottom: `1px solid ${T.border}` }}>
+      <div style={{ color: T.labelPrimary, fontSize: 13, fontWeight: 600 }}>Tier 分布</div>
+      <span style={{ color: T.labelSecondary, fontSize: 11 }}>质量均分 {tiers.qualityAvg.toFixed(0)}/100</span>
+    </div>
+    {total > 0 ? <div style={{ padding: '10px 12px' }}>
+      <div style={{ display: 'flex', height: 8, borderRadius: 4, overflow: 'hidden', marginBottom: 10, background: T.bgLayer2 }}>
+        {entries.map(e => e.count > 0 ? <div key={e.key} style={{ width: `${(e.count / total) * 100}%`, background: e.tint, minWidth: e.count > 0 ? 2 : 0 }} /> : null)}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+        {entries.map(e => <div key={e.key} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 2, background: e.tint, flexShrink: 0 }} />
+          <span style={{ color: T.labelSecondary, fontSize: 11 }}>{e.label}</span>
+          <strong style={{ color: T.labelPrimary, fontSize: 12, marginLeft: 'auto' }}>{e.count}</strong>
+        </div>)}
+      </div>
+    </div> : <div style={{ padding: '12px', color: T.labelSecondary, fontSize: 11 }}>暂无 Wiki 页面。</div>}
+    {Object.keys(tiers.types).length > 0 ? <div style={{ padding: '0 12px 10px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      {Object.entries(tiers.types).map(([type, count]) => <span key={type} style={{ fontSize: 10, color: T.labelSecondary, padding: '2px 6px', border: `1px solid ${T.border}`, borderRadius: 4 }}>{type}: {count}</span>)}
+      {tiers.pinned > 0 ? <span style={{ fontSize: 10, color: T.warning, padding: '2px 6px', border: `1px solid ${T.border}`, borderRadius: 4 }}>pinned: {tiers.pinned}</span> : null}
+    </div> : null}
+  </section>
+}
+
 function WorkspaceOverview({ scope, rpc, onOpen, openSidebar }: { scope: OksScope; rpc: OksConnectionRpc; onOpen: (view: WorkspaceView) => void; openSidebar?: () => boolean }): ReactNode {
   const [summary, setSummary] = useState<OverviewSummary>({ wikiCount: 0, draftCount: 0, rawFileCount: 0, rawBundleCount: 0 })
   useEffect(() => {
@@ -263,6 +312,7 @@ function WorkspaceOverview({ scope, rpc, onOpen, openSidebar }: { scope: OksScop
     </div>
     {summary.truncated ? <div style={{ marginBottom: 12, color: T.labelSecondary, fontSize: 11 }}>统计已达到扫描上限，进入知识库查看完整列表。</div> : null}
     <HealthCheckCard rpc={rpc} />
+    <TierDistributionCard rpc={rpc} />
     <WikiBrowser rpc={rpc} onOpenSettings={() => onOpen('settings')} />
   </div>
 }
@@ -316,6 +366,7 @@ function CompactOverview({ scope, rpc, onView }: { scope: OksScope; rpc: OksConn
     </div>
     {summary.truncated ? <div style={{ marginBottom: 12, padding: '8px 10px', borderRadius: 8, background: T.bgLayer2, color: T.labelSecondary, fontSize: 11 }}>统计已达到扫描上限，进入知识库查看完整列表。</div> : null}
     <HealthCheckCard rpc={rpc} />
+    <TierDistributionCard rpc={rpc} />
     <div style={{ display: 'grid', gap: 10 }}>
       <RecallTracePanel rpc compact />
       <ActivityPanel rpc compact />
