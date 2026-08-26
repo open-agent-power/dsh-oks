@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import test from 'node:test'
-import { listVfsFiles, parseOksFsTree, probeOksFs } from '../src/oks-fs.ts'
+import { createVfsRunnerRef, listVfsFiles, parseOksFsTree, probeOksFs } from '../src/oks-fs.ts'
+import { createDynamicSettingsHooks } from '../src/oks-config.ts'
 import { listRawBundles } from '../src/raw-browser.ts'
 import { getWikiPage, listWikiPages } from '../src/wiki-browser.ts'
 
@@ -141,4 +142,43 @@ test('raw browser discovers bundles through a VFS runner', async () => {
     const rel = relative(resolve(tmpdir()), root)
     if (rel && !rel.startsWith('..') && !isAbsolute(rel)) await rm(root, { recursive: true, force: true })
   }
+})
+
+test('createVfsRunnerRef applies a runtime toggle immediately and caches the probe', async () => {
+  let enabled = false
+  let probes = 0
+  const probe = async () => { probes++; return { probe: true } }
+  const browserRun = createVfsRunnerRef(() => enabled, probe)
+
+  assert.equal(await browserRun(), undefined)
+  assert.equal(probes, 0, 'disabled backend must not spawn a probe')
+
+  enabled = true            // user flips the switch at runtime (no reload)
+  assert.equal(probes, 0, 'toggling on alone must not probe eagerly')
+  const first = await browserRun()
+  assert.equal(first?.probe, true, 'toggle must take effect on the next call')
+  assert.equal(probes, 1)
+
+  assert.equal(await browserRun(), first, 'successful probe is cached')
+  assert.equal(probes, 1)
+
+  enabled = false           // flipping off must disable immediately too
+  assert.equal(await browserRun(), undefined)
+})
+
+test('a framework settings swap (setSource) flips the browser source on the next call', async () => {
+  // apply() wires the live decision to settingsHooks.getCurrent(); installSettingsSection
+  // swaps the live source via setSource when the resolved scope changes at runtime.
+  const hooks = createDynamicSettingsHooks({ vfs_enabled: false }, () => {})
+  let probes = 0
+  const probe = async () => { probes++; return { probe: true } }
+  const browserRun = createVfsRunnerRef(() => hooks.getCurrent().vfs_enabled === true, probe)
+
+  assert.equal(await browserRun(), undefined)
+  assert.equal(probes, 0)
+
+  hooks.setSource(() => ({ vfs_enabled: true }))     // runtime scope replacement
+  const first = await browserRun()
+  assert.equal(first?.probe, true, 'switch must be live, not captured at init')
+  assert.equal(probes, 1)
 })

@@ -19,7 +19,7 @@ import { getRawBundle, listRawBundles } from './raw-browser.ts'
 import { getOksDiagnostics, getOksOverview } from './oks-overview.ts'
 import { isPrestepRecallEnabled } from './prestep-control.ts'
 import { resolveOksBin } from './oks-runtime.ts'
-import { makeOksFsRunner, probeOksFs, type OksFsRun } from './oks-fs.ts'
+import { createVfsRunnerRef, makeOksFsRunner, probeOksFs, type OksFsRun } from './oks-fs.ts'
 import { clearOksKnowledgeBasePath, createDynamicSettingsHooks, parseOksKnowledgeBasePath, writeRecallYaml } from './oks-config.ts'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
@@ -363,21 +363,6 @@ function pushActivity(events: OksActivityEvent[], kind: string, label: string, d
 }
 
 export function apply(ctx: Context, config: OksConfig = {}) {
-  // Lazy-probe OKS 0.6.5 `oks fs` once per host lifetime when the VFS backend
-  // is opted in; undefined means the browser enumeration falls back to the
-  // readdir implementation. Off by default so the unbounded local-filesystem
-  // backend stays the safe default.
-  let oksFsProbe: Promise<OksFsRun | undefined> | undefined
-  const browserRun = (): Promise<OksFsRun | undefined> => {
-    if (config.vfs_enabled !== true) return Promise.resolve(undefined)
-    if (oksFsProbe === undefined) {
-      oksFsProbe = (async () => {
-        const run = makeOksFsRunner(oksBin())
-        return (await probeOksFs(run)) ? run : undefined
-      })()
-    }
-    return oksFsProbe
-  }
   const activity: OksActivityEvent[] = []
   const traces: OksRecallTrace[] = []
   const recordActivity = (kind: string, label: string, detail: string, status: OksActivityEvent['status'] = 'info', traceId?: string) => pushActivity(activity, kind, label, detail, status, traceId)
@@ -399,6 +384,19 @@ export function apply(ctx: Context, config: OksConfig = {}) {
     recordActivity('settings', '设置更新', `${changed.size} 项设置已同步`, 'ok')
   })
   installSettingsSection(ctx, OKS_NS, OksConfigSchema, config, settingsHooks)
+
+  // Live VFS source: read the switch from the current settings on every call so
+  // toggling the card takes effect immediately (no plugin reload). `undefined`
+  // means the browser enumeration falls back to readdir. Off by default so the
+  // unbounded local-filesystem backend stays the safe default, and the probe is
+  // lazy + cached so a disabled backend never spawns a subprocess.
+  const browserRun = createVfsRunnerRef(
+    () => settingsHooks.getCurrent().vfs_enabled === true,
+    async () => {
+      const run = makeOksFsRunner(oksBin())
+      return (await probeOksFs(run)) ? run : undefined
+    },
+  )
 
   // Read-only Web lifecycle browser API; the client receives sanitized data only.
   // Browser code calls /oks/wiki-list and /oks/wiki-get.  It never receives a

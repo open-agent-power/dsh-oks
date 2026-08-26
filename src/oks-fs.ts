@@ -138,3 +138,22 @@ export async function listVfsFiles(
     return null
   }
 }
+
+/**
+ * Bundle the "should we use VFS" decision and the lazy CLI probe into one live
+ * callable. `readEnabled` is evaluated on every invocation so it can reflect
+ * runtime settings (e.g. `settingsHooks.getCurrent().vfs_enabled`) — toggling
+ * the switch takes effect immediately without a plugin reload. The probe stays
+ * lazy and cached so a disabled backend never spawns a subprocess.
+ */
+export function createVfsRunnerRef(
+  readEnabled: () => boolean,
+  probe: () => Promise<OksFsRun | undefined>,
+): () => Promise<OksFsRun | undefined> {
+  let cached: Promise<OksFsRun | undefined> | undefined
+  return () => {
+    if (readEnabled() !== true) return Promise.resolve(undefined)
+    cached ??= probe()
+    return cached
+  }
+}
