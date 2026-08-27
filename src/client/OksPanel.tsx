@@ -206,13 +206,15 @@ function HealthCheckCard({ rpc }: { rpc: OksConnectionRpc }): ReactNode {
   const runLint = () => {
     setLoading(true); setExpanded(false)
     void callOksRpc(rpc, '/oks', 'lint', {}, undefined as never)
-      .then(r => { if (r.ok) { setResult(r.value as LintResult); setExpanded(!((r.value as LintResult)?.passed)) } })
+      .then(r => { if (r.ok) { setResult(r.value as LintResult); setExpanded((r.value as LintResult).errors > 0) } })
       .catch(() => undefined)
       .finally(() => setLoading(false))
   }
-  const tint = !result ? T.labelSecondary : result.passed ? T.success : result.errors > 0 ? T.danger : T.warning
-  const glyph = !result ? '◎' : result.passed ? '✓' : result.errors > 0 ? '✗' : '!'
-  const label = !result ? '未检查' : result.passed ? '全部通过' : result.errors > 0 ? `${result.errors} 个错误` : `${result.warnings} 个警告`
+  const hasErrors = Boolean(result && result.errors > 0)
+  const hasWarnings = Boolean(result && result.warnings > 0)
+  const tint = !result ? T.labelSecondary : hasErrors ? T.danger : hasWarnings ? T.warning : T.success
+  const glyph = !result ? '◎' : hasErrors ? '✗' : hasWarnings ? '!' : '✓'
+  const label = !result ? '未检查' : hasErrors ? `${result.errors} 个错误` : hasWarnings ? `${result.warnings} 条内容提醒` : '全部通过'
   return <section aria-label="知识库健康检查" style={{ border: `1px solid ${T.border}`, borderRadius: 10, background: T.bgLayer3, overflow: 'hidden', marginBottom: 12 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '11px 12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -220,6 +222,7 @@ function HealthCheckCard({ rpc }: { rpc: OksConnectionRpc }): ReactNode {
         <div>
           <div style={{ color: T.labelPrimary, fontSize: 13, fontWeight: 600 }}>健康检查</div>
           <div style={{ color: tint, fontSize: 11, marginTop: 2 }}>{loading ? '检查中…' : label}</div>
+          {hasWarnings && !hasErrors ? <div style={{ color: T.labelSecondary, fontSize: 10, marginTop: 2 }}>内容关系提醒，不影响知识库连接与召回。</div> : null}
         </div>
       </div>
       <button type="button" disabled={loading} onClick={runLint} style={{ border: `1px solid ${T.border}`, borderRadius: 7, padding: '5px 10px', background: T.bgLayer2, color: T.labelPrimary, cursor: loading ? 'wait' : 'pointer', fontSize: 12, fontWeight: 600, opacity: loading ? 0.6 : 1 }}>
@@ -233,7 +236,7 @@ function HealthCheckCard({ rpc }: { rpc: OksConnectionRpc }): ReactNode {
       </div>)}
     </div> : null}
     {result && result.items.length > 0 ? <button type="button" onClick={() => setExpanded(v => !v)} style={{ width: '100%', border: 0, borderTop: `1px solid ${T.border}`, padding: '6px 12px', background: T.bgLayer2, color: T.labelSecondary, cursor: 'pointer', fontSize: 11 }}>
-      {expanded ? '收起详情' : `展开 ${result.items.length} 个问题`}
+      {expanded ? '收起详情' : `展开 ${result.items.length} 条详情`}
     </button> : null}
   </section>
 }
