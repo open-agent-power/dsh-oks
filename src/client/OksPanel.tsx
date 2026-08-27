@@ -93,8 +93,12 @@ function KnowledgeRecallSwitch({ scope }: { scope: OksScope }): ReactNode {
         <div style={{ fontSize: 13, fontWeight: 600, color: T.labelPrimary }}>回答时自动参考我的知识</div>
         <p style={{ margin: '4px 0 0', fontSize: 12, lineHeight: 1.5, color: T.labelSecondary }}>当问题相关时，Agent 会优先参考已审核的 Wiki 知识。关闭后不会影响手动召回或工具调用后的记忆提示。</p>
       </div>
-      <button type="button" role="switch" aria-checked={enabled} disabled={!snap.writable || saving || snap.status === 'loading'} onClick={() => void update(!enabled)} style={{ flex: '0 0 auto', minWidth: 56, border: 0, borderRadius: 999, padding: '7px 10px', background: enabled ? T.brand : T.border, color: '#fff', cursor: snap.writable && !saving ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 600 }}>
-        {saving ? '保存中…' : enabled ? '开启' : '关闭'}
+      <button type="button" role="switch" aria-checked={enabled} aria-label={`自动参考知识：${saving ? '保存中' : enabled ? '已开启' : '已关闭'}`} disabled={!snap.writable || saving || snap.status === 'loading'} onClick={() => void update(!enabled)} style={{ position: 'relative', flex: '0 0 auto', width: 84, height: 34, border: 0, borderRadius: 999, padding: 3, background: enabled ? T.success : T.border, color: '#fff', cursor: snap.writable && !saving ? 'pointer' : 'not-allowed', fontSize: 10, fontWeight: 700, letterSpacing: '0.03em', opacity: saving ? 0.72 : 1 }}>
+        <span aria-hidden="true" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-around', zIndex: 1, pointerEvents: 'none' }}>
+          <span style={{ color: enabled ? 'rgba(255,255,255,0.82)' : T.labelPrimary }}>OFF</span>
+          <span style={{ color: enabled ? T.success : 'rgba(255,255,255,0.82)' }}>ON</span>
+        </span>
+        <span aria-hidden="true" style={{ position: 'absolute', top: 3, left: enabled ? 43 : 3, width: 38, height: 28, borderRadius: 999, background: '#fff', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.22)' }} />
       </button>
     </div>
     {error ? <div style={{ marginTop: 6, fontSize: 11, color: T.labelSecondary }}>{error}</div> : null}
