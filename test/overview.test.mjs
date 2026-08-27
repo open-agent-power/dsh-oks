@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { getOksDiagnostics, getOksOverview } from '../src/oks-overview.ts'
-import { isPrestepRecallEnabled } from '../src/prestep-control.ts'
+import { isOksRecallEnabled, isPrestepRecallEnabled } from '../src/prestep-control.ts'
 
 test('counts Wiki, Draft, and Raw lifecycle files without exposing paths', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-oks-overview-'))
@@ -31,6 +31,13 @@ test('automatic pre-step recall defaults on and can be disabled', () => {
   assert.equal(isPrestepRecallEnabled({}), true)
   assert.equal(isPrestepRecallEnabled({ prestep_enabled: true }), true)
   assert.equal(isPrestepRecallEnabled({ prestep_enabled: false }), false)
+  assert.equal(isPrestepRecallEnabled({ recall_enabled: false }), false)
+})
+
+test('OKS recall master switch defaults on and can disable every recall path', () => {
+  assert.equal(isOksRecallEnabled({}), true)
+  assert.equal(isOksRecallEnabled({ recall_enabled: true }), true)
+  assert.equal(isOksRecallEnabled({ recall_enabled: false }), false)
 })
 
 test('diagnostics classifies missing CLI and unconfigured knowledge base without paths', async () => {

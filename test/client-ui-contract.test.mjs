@@ -16,7 +16,7 @@ test('client UI keeps Chinese navigation and safe settings bindings', async () =
 
   assert.ok(panel.includes(zh(30693, 35782)))
   assert.ok(panel.includes(zh(31995, 32479, 35774, 32622)))
-  assert.ok(panel.includes("scope.set('prestep_enabled', next)"))
+  assert.ok(panel.includes("scope.set('recall_enabled', next)"))
   assert.ok(panel.includes('aria-expanded="false"'))
   assert.ok(panel.includes('OKS 上下文工作区'))
   assert.ok(panel.includes('活动时间线'))
@@ -36,6 +36,7 @@ test('client UI keeps Chinese navigation and safe settings bindings', async () =
   assert.ok(params.includes('aria-controls="oks-settings-content"'))
   assert.ok(params.includes('useState(false)'))
   assert.ok(params.includes('setExpanded(value => !value)'))
+  assert.ok(params.includes("up('recall_enabled'"))
   assert.ok(params.includes("up('prestep_enabled'"))
   assert.ok(params.includes('role="switch"'))
   assert.ok(panel.includes('window.removeEventListener'))
@@ -62,7 +63,7 @@ test('client UI keeps Chinese navigation and safe settings bindings', async () =
   assert.ok(browser.includes('此内容没有可预览的文本。'))
   assert.ok(browser.includes('证据包：'))
 
-  for (const key of ['knowledge_base_path', 'recall_floor', 'recall_topn', 'prestep_floor', 'posttool_mode', 'search_backend']) {
+  for (const key of ['knowledge_base_path', 'recall_enabled', 'recall_floor', 'recall_topn', 'prestep_floor', 'posttool_mode', 'search_backend']) {
     assert.ok(params.includes(`v.${key}`) || params.includes(`up('${key}'`) || params.includes(`String(v.${key})`))
   }
 })

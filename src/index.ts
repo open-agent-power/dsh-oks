@@ -17,7 +17,7 @@ import { dirname, join } from 'node:path'
 import { getDraftPage, getWikiPage, listDraftPages, listWikiPages } from './wiki-browser.ts'
 import { getRawBundle, listRawBundles } from './raw-browser.ts'
 import { getOksDiagnostics, getOksOverview } from './oks-overview.ts'
-import { isPrestepRecallEnabled } from './prestep-control.ts'
+import { isOksRecallEnabled, isPrestepRecallEnabled } from './prestep-control.ts'
 import { resolveOksBin } from './oks-runtime.ts'
 import { createVfsRunnerRef, makeOksFsRunner, probeOksFs, type OksFsRun } from './oks-fs.ts'
 import { clearOksKnowledgeBasePath, createDynamicSettingsHooks, parseOksKnowledgeBasePath, writeRecallYaml } from './oks-config.ts'
@@ -41,6 +41,7 @@ export const OKS_NS = settingsNamespace('oks')
 
 export interface OksConfig {
   knowledge_base_path?: string
+  recall_enabled?: boolean
   recall_floor?: number
   recall_topn?: number
   recall_minlen?: number
@@ -57,9 +58,10 @@ export interface OksConfig {
 }
 
 /** Schema for the settings card. knowledge_base_path writes ~/.oks/config.json
- * (via `oks config set`); the rest write settings/recall.yaml. */
+ * (via `oks config set`); recall tuning values write settings/recall.yaml. */
 export const OksConfigSchema: z<OksConfig> = z.object({
   knowledge_base_path: z.string().default(''),
+  recall_enabled: z.boolean().default(true),
   recall_floor: z.number().min(0).max(1).step(0.05).default(0.7),
   recall_topn: z.number().step(1).min(1).max(10).default(3),
   recall_minlen: z.number().step(1).min(1).max(50).default(6),
@@ -109,7 +111,7 @@ async function syncOksConfig(cfg: OksConfig, changed: ReadonlySet<string>): Prom
     }
   }
 
-  const recallChanged = new Set([...changed].filter(key => key !== 'knowledge_base_path'))
+  const recallChanged = new Set([...changed].filter(key => key !== 'knowledge_base_path' && key !== 'recall_enabled'))
   if (recallChanged.size === 0) return
 
   // A path change is authoritative: an explicit empty value means disconnected
@@ -600,6 +602,10 @@ export function apply(ctx: Context, config: OksConfig = {}) {
       render: (_args, value) => [{ type: 'text', text: value }],
     },
     async execute(args) {
+      if (!isOksRecallEnabled(settingsHooks.getCurrent())) {
+        recordActivity('tool', 'oks_recall 已关闭', 'OKS 召回总开关已关闭', 'info')
+        return 'OKS recall is disabled by the plugin setting.'
+      }
       const limit = args.limit ?? 3
       const all = [args.query, ...(args.queries ?? [])].filter(Boolean)
       if (all.length <= 1) {
@@ -818,9 +824,10 @@ export function apply(ctx: Context, config: OksConfig = {}) {
   // Only signal for read/write/edit/bash/grep/glob; OKS failures are no-ops.
   ctx.on('tools/post-execute', async (exec: ToolExecution, _result: Readonly<ToolExecutionResult>, next): Promise<PostToolDecision> => {
     if (!SIGNAL_TOOLS.has(exec.name)) return next()
+    const activeConfig = settingsHooks.getCurrent()
+    if (!isOksRecallEnabled(activeConfig)) return next()
     const query = deriveQuery(exec)
     if (query.length < 6) return next()
-    const activeConfig = settingsHooks.getCurrent()
     const floor = activeConfig.posttool_floor ?? 0.9
     const topn = activeConfig.posttool_topn ?? 2
     let out = ''

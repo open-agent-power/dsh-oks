@@ -76,22 +76,22 @@ function KnowledgeRecallSwitch({ scope }: { scope: OksScope }): ReactNode {
     () => scope.getSnapshot(),
     () => scope.getSnapshot(),
   )
-  const enabled = (snap.value?.prestep_enabled ?? true) !== false
+  const enabled = (snap.value?.recall_enabled ?? true) !== false
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const update = async (next: boolean) => {
     if (!snap.writable || saving) return
     setSaving(true); setError('')
-    try { await scope.set('prestep_enabled', next) }
-    catch { setError('召回开关保存失败，请稍后重试。') }
+    try { await scope.set('recall_enabled', next) }
+    catch { setError('OKS 召回开关保存失败，请稍后重试。') }
     finally { setSaving(false) }
   }
   if (snap.status === 'unavailable') return null
   return <div style={{ margin: '0 0 12px', padding: '12px 14px', border: `1px solid ${T.border}`, borderRadius: 10, background: T.bgLayer2 }}>
     <div style={{ display: 'flex', gap: 12, justifyContent: 'space-between', alignItems: 'flex-start' }}>
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: T.labelPrimary }}>回答时自动参考我的知识</div>
-        <p style={{ margin: '4px 0 0', fontSize: 12, lineHeight: 1.5, color: T.labelSecondary }}>当问题相关时，Agent 会优先参考已审核的 Wiki 知识。关闭后不会影响手动召回或工具调用后的记忆提示。</p>
+        <div style={{ fontSize: 13, fontWeight: 600, color: T.labelPrimary }}>启用 OKS 召回</div>
+        <p style={{ margin: '4px 0 0', fontSize: 12, lineHeight: 1.5, color: T.labelSecondary }}>开启后允许自动召回、Agent 调用 oks_recall 和工具后的记忆提示。关闭后仍可浏览知识库、查看状态和健康检查。</p>
       </div>
       <button type="button" role="switch" aria-checked={enabled} disabled={!snap.writable || saving || snap.status === 'loading'} onClick={() => void update(!enabled)} style={{ flex: '0 0 auto', minWidth: 56, border: 0, borderRadius: 999, padding: '7px 10px', background: enabled ? T.brand : T.border, color: '#fff', cursor: snap.writable && !saving ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 600 }}>
         {saving ? '保存中…' : enabled ? '开启' : '关闭'}

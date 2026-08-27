@@ -29,6 +29,7 @@ export interface RecallParamsCardProps {
 
 const FALLBACK = {
   knowledge_base_path: '',
+  recall_enabled: true,
   recall_floor: 0.7, recall_topn: 3, recall_minlen: 6, recall_cooldown: 10,
   prestep_enabled: true,
   prestep_floor: 0.85, prestep_knowledge_only: true,
@@ -144,6 +145,13 @@ export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
           {/* 🔍 召回 */}
           <div style={group}>
             <div style={groupTitle}>🔍 召回 (recall)</div>
+            <Field id={gid('re')} lab="启用 OKS 召回" h="关闭后，自动召回、oks_recall 工具和工具后的记忆提示都会停止；知识库浏览不受影响。">
+              <button id={gid('re')} type="button" role="switch" aria-checked={Boolean(v.recall_enabled ?? true)}
+                onClick={() => up('recall_enabled', !Boolean(v.recall_enabled ?? true))}
+                style={{ alignSelf: 'flex-start', minWidth: 68, border: 0, borderRadius: 999, padding: '7px 11px', background: Boolean(v.recall_enabled ?? true) ? T.brand : T.border, color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                {Boolean(v.recall_enabled ?? true) ? '已开启' : '已关闭'}
+              </button>
+            </Field>
             <Field id={gid('rf')} lab="召回门槛" h="召回阈值，rel 低于此不注入">
               <input id={gid('rf')} style={input} type="number" step="0.05" min="0" max="1"
                 value={Number(v.recall_floor ?? 0.7)}
@@ -169,7 +177,7 @@ export function RecallParamsCard(props: RecallParamsCardProps): ReactNode {
           {/* ⚡ pre-step hook（确定性每轮注入） */}
           <div style={group}>
             <div style={groupTitle}>⚡ pre-step hook（确定性每轮注入）</div>
-            <Field id={gid('pe')} lab="自动召回" h="开启后，每轮回答前自动召回相关 Wiki；关闭后仍可手动调用 oks_recall。">
+            <Field id={gid('pe')} lab="自动召回" h="开启后，每轮回答前自动召回相关 Wiki；关闭后仍可手动调用 oks_recall（总开关开启时）。">
               <button id={gid('pe')} type="button" role="switch" aria-checked={Boolean(v.prestep_enabled ?? true)}
                 onClick={() => up('prestep_enabled', !Boolean(v.prestep_enabled ?? true))}
                 style={{ alignSelf: 'flex-start', minWidth: 68, border: 0, borderRadius: 999, padding: '7px 11px', background: Boolean(v.prestep_enabled ?? true) ? T.brand : T.border, color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
