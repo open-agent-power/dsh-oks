@@ -368,8 +368,8 @@ function CompactOverview({ scope, rpc, onView }: { scope: OksScope; rpc: OksConn
     <HealthCheckCard rpc={rpc} />
     <TierDistributionCard rpc={rpc} />
     <div style={{ display: 'grid', gap: 10 }}>
-      <RecallTracePanel rpc compact />
-      <ActivityPanel rpc compact />
+      <RecallTracePanel rpc={rpc} compact />
+      <ActivityPanel rpc={rpc} compact />
     </div>
     <button type="button" onClick={() => onView('knowledge')} style={{ width: '100%', marginTop: 12, border: `1px solid ${T.border}`, borderRadius: 9, padding: '9px 12px', background: T.bgLayer2, color: T.labelPrimary, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>进入完整知识库</button>
   </div>
