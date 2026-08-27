@@ -268,12 +268,59 @@ function appendFeedback(record: Record<string, unknown>): void {
 }
 
 /** Parse oks recall JSON to a plain {knowledge, episodic} object (no prompt text).
- * Used by the multi-query fan-out in oks_recall. */
-function parseRecallJson(stdout: string): { knowledge: unknown[]; episodic: unknown[] } {
-  try {
-    const d = JSON.parse(stdout) as { knowledge?: unknown[]; episodic?: unknown[] }
-    return { knowledge: d.knowledge ?? [], episodic: d.episodic ?? [] }
-  } catch { return { knowledge: [], episodic: [] } }
+ * Used by the multi-query fan-out in oks_recall. Invalid output is a failed
+ * query, not a successful empty result, so the caller can report it honestly. */
+export function parseRecallJson(stdout: string): { knowledge: unknown[]; episodic: unknown[] } {
+  const d = JSON.parse(stdout) as { knowledge?: unknown[]; episodic?: unknown[] }
+  if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error('OKS recall returned a non-object response')
+  const knowledge = d.knowledge
+  const episodic = d.episodic
+  if (knowledge === undefined && episodic === undefined) throw new Error('OKS recall response has no result arrays')
+  if ((knowledge !== undefined && !Array.isArray(knowledge)) || (episodic !== undefined && !Array.isArray(episodic))) {
+    throw new Error('OKS recall response has invalid result arrays')
+  }
+  const isCandidate = (value: unknown): boolean => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+  if ((knowledge ?? []).some(value => !isCandidate(value)) || (episodic ?? []).some(value => !isCandidate(value))) {
+    throw new Error('OKS recall response has invalid candidates')
+  }
+  return {
+    knowledge: knowledge ?? [],
+    episodic: episodic ?? [],
+  }
+}
+
+interface RecallBatch {
+  knowledge: unknown[]
+  episodic: unknown[]
+  succeeded: number
+  failed: number
+}
+
+/** Merge settled multi-query results while preserving whether any query failed. */
+export function mergeRecallResults(results: readonly PromiseSettledResult<{ knowledge: unknown[]; episodic: unknown[] }>[]): RecallBatch {
+  const seen = new Set<string>()
+  const knowledge: unknown[] = []
+  const episodic: unknown[] = []
+  let succeeded = 0
+  let failed = 0
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      failed++
+      continue
+    }
+    succeeded++
+    for (const h of result.value.knowledge) {
+      if (!h || typeof h !== 'object' || Array.isArray(h)) continue
+      const slug = String((h as Record<string, unknown>).slug ?? '')
+      if (slug && !seen.has(slug)) { seen.add(slug); knowledge.push(h) }
+    }
+    for (const h of result.value.episodic) {
+      if (!h || typeof h !== 'object' || Array.isArray(h)) continue
+      const sourcePath = String((h as Record<string, unknown>).source_path ?? '')
+      if (sourcePath && !seen.has(sourcePath)) { seen.add(sourcePath); episodic.push(h) }
+    }
+  }
+  return { knowledge, episodic, succeeded, failed }
 }
 
 /** Parse `oks lint` CLI output into a structured health-check result.
@@ -615,27 +662,25 @@ export function apply(ctx: Context, config: OksConfig = {}) {
           throw error
         }
       }
-      // Fan out: parallel recall per query, merge + dedupe by slug.
-      const outs = await Promise.all(all.map(q =>
+      // Fan out: parallel recall per query, merge + dedupe by slug. Keep
+      // rejected queries visible so all-failure is not reported as a success.
+      const settled = await Promise.allSettled(all.map(q =>
         runOks(['recall', q, '--format', 'json', '--limit', String(limit)])
-          .then(parseRecallJson).catch(() => ({ knowledge: [], episodic: [] }))))
-      const seen = new Set<string>()
-      const knowledge: unknown[] = []
-      const episodic: unknown[] = []
-      for (const o of outs) {
-        for (const h of o.knowledge ?? []) {
-          const slug = String((h as Record<string, unknown>).slug ?? '')
-          if (slug && !seen.has(slug)) { seen.add(slug); knowledge.push(h) }
-        }
-        for (const h of o.episodic ?? []) {
-          const p = String((h as Record<string, unknown>).source_path ?? '')
-          if (p && !seen.has(p)) { seen.add(p); episodic.push(h) }
-        }
+          .then(parseRecallJson)))
+      const batch = mergeRecallResults(settled)
+      if (batch.succeeded === 0) {
+        const traceId = recordTrace('tool', '', limit, 'error')
+        recordActivity('tool', 'oks_recall 多查询失败', `全部 ${batch.failed} 个查询均失败`, 'error', traceId)
+        throw new Error('OKS recall failed for all queries')
       }
-      const out = JSON.stringify({ schema_version: 'recall-response/v1-multi', query: args.query, knowledge, episodic })
-      const traceId = recordTrace('tool', out, limit)
-      const trace = updateTrace(traceId, 'ok')
-      recordActivity('tool', 'oks_recall 多查询', `合并 ${trace?.candidateCount ?? 0} 个候选`, 'ok', traceId)
+      const out = JSON.stringify({ schema_version: 'recall-response/v1-multi', query: args.query, knowledge: batch.knowledge, episodic: batch.episodic })
+      const traceId = recordTrace('tool', out, limit, batch.failed > 0 ? 'info' : 'ok')
+      const trace = updateTrace(traceId, batch.failed > 0 ? 'info' : 'ok')
+      const status = batch.failed > 0 ? 'info' : 'ok'
+      const detail = batch.failed > 0
+        ? `合并 ${trace?.candidateCount ?? 0} 个候选；${batch.failed}/${batch.succeeded + batch.failed} 个查询失败`
+        : `合并 ${trace?.candidateCount ?? 0} 个候选`
+      recordActivity('tool', batch.failed > 0 ? 'oks_recall 多查询部分失败' : 'oks_recall 多查询', detail, status, traceId)
       return out
     },
   }))
