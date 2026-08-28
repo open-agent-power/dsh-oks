@@ -9,7 +9,17 @@ test('package contract ships built host and client entries', async () => {
   assert.equal(packageJson.exports['.'].default, './lib/index.mjs')
   assert.equal(packageJson.exports['./client'].default, './lib/client.js')
   assert.equal(packageJson.engines.node, '>=22')
-  assert.equal(packageJson.peerDependencies['@deepseek-ai/dsh'], '>=0.1.0-rc.8 <0.2.0')
+  assert.equal(packageJson.peerDependencies['@deepseek-ai/dsh'], '>=0.1.0-rc.8 <0.2.0-0')
+  for (const name of [
+    '@deepseek-ai/dsh-client-connection',
+    '@deepseek-ai/dsh-client-runtime',
+    '@deepseek-ai/dsh-client-ui-settings-plugins',
+    '@deepseek-ai/dsh-llm',
+    '@deepseek-ai/dsh-settings',
+    '@deepseek-ai/dsh-tools',
+  ]) {
+    assert.equal(packageJson.peerDependencies[name], '>=0.1.0-rc.8 <0.2.0-0', `${name} must resolve within the supported public DSH RC8+ line`)
+  }
   assert.equal(packageJson.peerDependencies['dsh-better-sidebar'], '>=0.14.0 <0.16.0')
   assert.equal(packageJson.peerDependenciesMeta['dsh-better-sidebar'].optional, true)
   assert.equal(packageJson.files.includes('src/**/*.ts'), false)

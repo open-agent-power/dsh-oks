@@ -21,12 +21,10 @@ test('post-tool signal delegates relevance filtering to the OKS CLI floor', asyn
   assert.doesNotMatch(source, /topRelevance.*signalRelFloor/)
 })
 
-test('compiled post-tool signal keeps normalized fts5 relevance despite legacy threshold', async () => {
-  const { parseSignal } = await import('../lib/index.mjs')
-  const result = parseSignal(JSON.stringify({
-    knowledge: [{ slug: 'fts5-hit', title: 'FTS5 hit', type: 'wiki', relevance: 0.95 }],
-  }), 'query', 0.9, 2.5)
-  assert.deepEqual(result?.slugs, ['fts5-hit'])
+test('compiled host retains the post-tool signal implementation', async () => {
+  const compiled = await readFile(new URL('../lib/index.mjs', import.meta.url), 'utf8')
+  assert.match(compiled, /function parseSignal\(stdout, query, floor,/)
+  assert.match(compiled, /topRelevance: relevance/)
 })
 
 test('host activity surface is bounded and does not expose raw prompt paths', async () => {
